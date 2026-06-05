@@ -1,0 +1,18 @@
+_format_version: "3.0"
+
+services:
+  - name: banking-api
+    url: http://banking-api-service:8080
+    routes:
+      - name: banking-api-route
+        paths:
+          - /api/accounts
+        strip_path: false
+    plugins:
+      - name: opa-authz
+        config:
+          opa_url: http://opa:8181/v1/data/banking_authz/allow
+          introspection_url: http://keycloak:8080/realms/banking-poc/protocol/openid-connect/token/introspect
+          introspection_client_id: kong-introspection
+          introspection_client_secret: kong-introspection-secret
+          timeout_ms: 2000

@@ -1,103 +1,65 @@
 package com.banking.poc.bankingapi.security;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import jakarta.servlet.FilterChain;
-import jakarta.servlet.ServletException;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
-import org.springframework.boot.web.servlet.FilterRegistrationBean;
-import org.springframework.context.annotation.Configuration;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
-import org.springframework.core.Ordered;
-import org.springframework.util.StringUtils;
-import org.springframework.web.filter.OncePerRequestFilter;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.config.Customizer;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.oauth2.core.OAuth2Error;
+import org.springframework.security.oauth2.core.OAuth2TokenValidator;
+import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.jwt.JwtClaimValidator;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.jwt.JwtValidators;
+import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
+import org.springframework.security.web.SecurityFilterChain;
 
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.util.Base64;
+import java.util.List;
 
 @Configuration
 public class SecurityConfig {
 
     @Bean
-    FilterRegistrationBean<JwtAuthenticationFilter> jwtAuthenticationFilter(JwtAuthenticationDecoder jwtAuthenticationDecoder) {
-        FilterRegistrationBean<JwtAuthenticationFilter> registration = new FilterRegistrationBean<>();
-        registration.setFilter(new JwtAuthenticationFilter(jwtAuthenticationDecoder));
-        registration.setOrder(Ordered.HIGHEST_PRECEDENCE);
-        return registration;
+    JwtDecoder jwtDecoder(
+            @Value("${spring.security.oauth2.resourceserver.jwt.jwk-set-uri}") String jwkSetUri,
+            @Value("${banking-api.security.issuer-uri}") String issuerUri,
+            @Value("${banking-api.security.audience}") String audience) {
+        NimbusJwtDecoder jwtDecoder = NimbusJwtDecoder.withJwkSetUri(jwkSetUri).build();
+        jwtDecoder.setJwtValidator(jwtValidator(issuerUri, audience));
+        return jwtDecoder;
     }
 
     @Bean
-    JwtAuthenticationDecoder jwtAuthenticationDecoder(ObjectMapper objectMapper) {
-        return token -> {
-            String[] parts = token.split("\\.", -1);
-            if (parts.length != 3 || !StringUtils.hasText(parts[1])) {
-                throw new InvalidJwtException("Token must be a JWT");
+    SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+        return http
+                .csrf(csrf -> csrf.disable())
+                .authorizeHttpRequests(authorize -> authorize
+                        .requestMatchers("/actuator/health").permitAll()
+                        .anyRequest().authenticated())
+                .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()))
+                .build();
+    }
+
+    static OAuth2TokenValidator<Jwt> jwtValidator(String issuerUri, String audience) {
+        OAuth2TokenValidator<Jwt> issuerValidator = JwtValidators.createDefaultWithIssuer(issuerUri);
+        OAuth2TokenValidator<Jwt> audienceValidator = new JwtClaimValidator<List<String>>(
+                "aud",
+                tokenAudience -> tokenAudience != null && tokenAudience.contains(audience));
+
+        return new DelegatingOAuth2TokenValidator<>(
+                issuerValidator,
+                audienceValidatorWithMessage(audienceValidator));
+    }
+
+    private static OAuth2TokenValidator<Jwt> audienceValidatorWithMessage(OAuth2TokenValidator<Jwt> audienceValidator) {
+        return jwt -> {
+            if (!audienceValidator.validate(jwt).hasErrors()) {
+                return audienceValidator.validate(jwt);
             }
 
-            try {
-                String payload = new String(Base64.getUrlDecoder().decode(parts[1]), StandardCharsets.UTF_8);
-                JsonNode claims = objectMapper.readTree(payload);
-                String subject = claims.path("sub").asText();
-                if (!StringUtils.hasText(subject)) {
-                    throw new InvalidJwtException("JWT subject is required");
-                }
-                return new JwtClaims(subject);
-            } catch (IOException | IllegalArgumentException ex) {
-                throw new InvalidJwtException("Invalid JWT", ex);
-            }
+            return org.springframework.security.oauth2.core.OAuth2TokenValidatorResult.failure(
+                    new OAuth2Error("invalid_token", "The required audience is missing", null));
         };
-    }
-}
-
-interface JwtAuthenticationDecoder {
-    JwtClaims decode(String token);
-}
-
-record JwtClaims(String subject) {
-}
-
-class JwtAuthenticationFilter extends OncePerRequestFilter {
-
-    private final JwtAuthenticationDecoder jwtAuthenticationDecoder;
-
-    JwtAuthenticationFilter(JwtAuthenticationDecoder jwtAuthenticationDecoder) {
-        this.jwtAuthenticationDecoder = jwtAuthenticationDecoder;
-    }
-
-    @Override
-    protected boolean shouldNotFilter(HttpServletRequest request) {
-        String requestUri = request.getRequestURI();
-        return !requestUri.startsWith("/api/") || "/actuator/health".equals(requestUri);
-    }
-
-    @Override
-    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
-            throws ServletException, IOException {
-        String authorization = request.getHeader("Authorization");
-        if (!StringUtils.hasText(authorization) || !authorization.startsWith("Bearer ")) {
-            response.sendError(HttpServletResponse.SC_UNAUTHORIZED);
-            return;
-        }
-
-        String token = authorization.substring(7);
-        try {
-            request.setAttribute("jwtClaims", jwtAuthenticationDecoder.decode(token));
-            filterChain.doFilter(request, response);
-        } catch (InvalidJwtException ex) {
-            response.sendError(HttpServletResponse.SC_UNAUTHORIZED);
-        }
-    }
-}
-
-class InvalidJwtException extends RuntimeException {
-
-    InvalidJwtException(String message) {
-        super(message);
-    }
-
-    InvalidJwtException(String message, Throwable cause) {
-        super(message, cause);
     }
 }

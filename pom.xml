@@ -17,6 +17,7 @@
 
     <modules>
         <module>services/banking-api-service</module>
+        <module>services/identity-bootstrap-service</module>
     </modules>
 
     <properties>

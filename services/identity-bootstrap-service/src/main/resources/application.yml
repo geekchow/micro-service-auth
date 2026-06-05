@@ -1,0 +1,11 @@
+keycloak:
+  admin:
+    server-url: ${KEYCLOAK_ADMIN_SERVER_URL:http://localhost:8080}
+    realm: ${KEYCLOAK_ADMIN_REALM:banking-poc}
+    admin-realm: ${KEYCLOAK_ADMIN_ADMIN_REALM:master}
+    client-id: ${KEYCLOAK_ADMIN_CLIENT_ID:admin-cli}
+    username: ${KEYCLOAK_ADMIN_USERNAME:admin}
+    password: ${KEYCLOAK_ADMIN_PASSWORD:admin}
+demo:
+  bootstrap:
+    secret: ${DEMO_BOOTSTRAP_SECRET:demo-bootstrap-secret}

@@ -3,3 +3,13 @@ management:
     web:
       exposure:
         include: health
+banking-api:
+  security:
+    issuer-uri: ${BANKING_API_ISSUER_URI:http://localhost:9081/realms/banking-poc}
+    audience: ${BANKING_API_AUDIENCE:mobile-banking-app}
+spring:
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          jwk-set-uri: ${BANKING_API_JWK_SET_URI:http://localhost/mock/jwks}
