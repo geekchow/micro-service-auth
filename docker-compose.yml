@@ -44,6 +44,10 @@ services:
     depends_on:
       - keycloak
 
+  curl:
+    image: curlimages/curl:8.8.0
+    command: ["sleep", "infinity"]
+
   kong:
     image: kong:3.7
     environment:

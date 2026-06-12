@@ -32,6 +32,22 @@ The demo script performs these actions:
 
 The bootstrap service is internal only in the current Compose setup.
 
+## Internal Inspection With The curl Container
+
+The Compose file includes a helper service named `curl`.
+
+It stays on the same internal Docker network as the other services so you can inspect internal-only endpoints.
+
+Examples:
+
+```bash
+docker compose exec curl sh
+docker compose exec curl curl http://keycloak:8080/realms/banking-poc/.well-known/openid-configuration
+docker compose exec curl curl -i http://identity-bootstrap-service:8080/demo/users
+docker compose exec curl curl http://opa:8181/v1/data/banking_authz/allow
+docker compose exec curl curl http://banking-api-service:8080/actuator/health
+```
+
 ## If Something Fails
 
 Start with these checks:

@@ -26,6 +26,7 @@ flowchart LR
 - `opa`: evaluates account access policy
 - `banking-api-service`: validates JWT signature, issuer, and audience, then serves account APIs
 - `identity-bootstrap-service`: creates demo-managed users in Keycloak for the PoC
+- `curl`: inspection helper container on the internal Compose network
 
 ## Prerequisites
 
@@ -65,6 +66,19 @@ tampered token -> 401
 - OPA: `http://localhost:8181`
 
 `identity-bootstrap-service` is not host-published. The demo script reaches it over the internal Docker Compose network.
+
+## Internal Inspection Container
+
+The Compose stack includes an always-on helper container named `curl` for internal network inspection.
+
+Example commands:
+
+```bash
+docker compose exec curl sh
+docker compose exec curl curl http://keycloak:8080/realms/banking-poc/.well-known/openid-configuration
+docker compose exec curl curl -i http://identity-bootstrap-service:8080/demo/users
+docker compose exec curl curl http://opa:8181/v1/data/banking_authz/allow
+```
 
 ## Verify
 
