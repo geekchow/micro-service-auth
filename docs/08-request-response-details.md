@@ -128,15 +128,31 @@ username=admin
 password=admin
 ```
 
+Curl example:
+
+```bash
+curl -sS -X POST "http://keycloak:8080/realms/master/protocol/openid-connect/token" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  --data-urlencode "grant_type=password" \
+  --data-urlencode "client_id=admin-cli" \
+  --data-urlencode "username=admin" \
+  --data-urlencode "password=admin"
+```
+
 ### Response
 
 Keycloak returns JSON that contains at least:
 
 ```json
 {
-  "access_token": "<admin-token>",
-  "expires_in": 300,
-  "token_type": "Bearer"
+  "access_token": "eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICJrcTd4OGlTZDl3TGwtOUpSRkZ0MzE0NFZ2bnF3eFJMcWFwMjNxUEQ1bjRRIn0.eyJleHAiOjE3ODE0NTA3MDEsImlhdCI6MTc4MTQ1MDY0MSwianRpIjoiMWE2ZjNmODUtMzI1Zi00ZDg4LTgyODYtNWQyYTZkYmM2Yzc3IiwiaXNzIjoiaHR0cDovL2tleWNsb2FrOjgwODAvcmVhbG1zL21hc3RlciIsInR5cCI6IkJlYXJlciIsImF6cCI6ImFkbWluLWNsaSIsInNpZCI6IjJmOTE0ZjBlLTc2OTAtNDM1YS1iZjk1LWQ4ODcyMTNmY2E4ZSIsInNjb3BlIjoicHJvZmlsZSBlbWFpbCJ9.OFduJ4Zziz_lrs0CWlkksCZlnJmr6vbU31Z0ECuR8KvBgt6ALJ5w4zH50Gm1VwH-qhmaq-ZltuZtGiUUeL1vQJfKhSk69hSEqwQyDXLOpEiBeTZZ6OnhG1qMgdapqnRrv5qNtSFQY216S8pba1geHeP6ngzk27Ar0G443tC80TaFag6r3-n-1WgeGGZJz-QegcfIefzTLbw5p9Z0QFoQp2YfohF3TCRHJVlnNk3_70cEtLE_W_dEuJWhHhgq4GLIZE-zWK5-_ARK601geeaj8grjxGGtwg371YCG6QzwNr8FK78d6C9mMzrmrc21HCCGhln-6XYIlWs0DkUMdIxidw",
+  "expires_in": 60,
+  "refresh_expires_in": 1800,
+  "refresh_token": "eyJhbGciOiJIUzUxMiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICI4ZTBlZTZkNi05ZmI2LTRlYTUtOTgxZS1lNmZiM2Y1NDBlMGYifQ.eyJleHAiOjE3ODE0NTI0NDEsImlhdCI6MTc4MTQ1MDY0MSwianRpIjoiNTEzYzdjOWYtMTZkYi00YjMzLWFmM2ItN2I3YzRkMzc3ZjhmIiwiaXNzIjoiaHR0cDovL2tleWNsb2FrOjgwODAvcmVhbG1zL21hc3RlciIsImF1ZCI6Imh0dHA6Ly9rZXljbG9hazo4MDgwL3JlYWxtcy9tYXN0ZXIiLCJ0eXAiOiJSZWZyZXNoIiwiYXpwIjoiYWRtaW4tY2xpIiwic2lkIjoiMmY5MTRmMGUtNzY5MC00MzVhLWJmOTUtZDg4NzIxM2ZjYThlIiwic2NvcGUiOiJwcm9maWxlIGJhc2ljIHdlYi1vcmlnaW5zIGFjciBlbWFpbCByb2xlcyJ9.9hSn0WBzbh3v5flTCybuo26tpT5g9R4FwFjf0sLybAkCBB-2nT8eXbSwEACg3gSj8RQGJR7oHFxUQT_6g4pEHQ",
+  "token_type": "Bearer",
+  "not-before-policy": 0,
+  "session_state": "2f914f0e-7690-435a-bf95-d887213fca8e",
+  "scope": "profile email"
 }
 ```
 
@@ -159,6 +175,13 @@ GET /admin/realms/banking-poc/users?username=alice&exact=true
 Authorization: Bearer <admin-token>
 ```
 
+Curl example:
+
+```bash
+curl -sS "http://keycloak:8080/admin/realms/banking-poc/users?username=alice&exact=true" \
+  -H "Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICJrcTd4OGlTZDl3TGwtOUpSRkZ0MzE0NFZ2bnF3eFJMcWFwMjNxUEQ1bjRRIn0.eyJleHAiOjE3ODE0NTEyMDcsImlhdCI6MTc4MTQ1MTE0NywianRpIjoiMTRkMjNhYjQtNjI4ZS00MjAxLWEwZTktNTYwYjEzNDYyNWVjIiwiaXNzIjoiaHR0cDovL2tleWNsb2FrOjgwODAvcmVhbG1zL21hc3RlciIsInR5cCI6IkJlYXJlciIsImF6cCI6ImFkbWluLWNsaSIsInNpZCI6ImNjZGM3MWU2LWNlMjQtNDljNC05YTYwLWQzNDkxMTgxMDhhNiIsInNjb3BlIjoicHJvZmlsZSBlbWFpbCJ9.AGJc5AxiYKjT-js-f8I1pFFsXoshYqhRiXAauDi_VdfSrQmpceUYMvHYjhX2v81dLh5xy1kcBo_tmbgHNryyh-st_-QQ68BsIyYtW_1GXpnbTWnX_eI9546Dcyjuy5hmosBuWgj7jLBOJhT54shiGRnRAA5RSTpsHWGNC9qSW8nnIlBtVIWbUZhIzeD2_za-CaAfCoICvLWFkjlC79oZjRL3eOpvn8k_px_djQMxWQdQqOEjKSERrm_d7AW9r_NjDl4RNMvrt7v-QudtwGO-sSuTSASRLshceS0a0Zj5yb1ryFUrTtT7u7_NSVNt_sYn_d22wFCb0n_gMbVBXasKaA"
+```
+
 Response when not found:
 
 ```json
@@ -170,8 +193,33 @@ Response when found:
 ```json
 [
   {
-    "id": "user-123",
-    "username": "alice"
+    "id": "134d2448-334d-4be5-8868-4d13085bf2cd",
+    "username": "alice",
+    "firstName": "alice",
+    "lastName": "Demo",
+    "email": "alice@example.local",
+    "emailVerified": false,
+    "attributes": {
+      "customer_id": [
+        "C-1001"
+      ],
+      "account_ids": [
+        "A-1001"
+      ]
+    },
+    "createdTimestamp": 1780652643152,
+    "enabled": true,
+    "totp": false,
+    "disableableCredentialTypes": [],
+    "requiredActions": [],
+    "notBefore": 0,
+    "access": {
+      "manageGroupMembership": true,
+      "view": true,
+      "mapRoles": true,
+      "impersonate": true,
+      "manage": true
+    }
   }
 ]
 ```
@@ -652,16 +700,16 @@ HTTP/1.1 401 Unauthorized
 
 ## Quick Comparison Table
 
-| Sender | Receiver | Main purpose | Body style |
-|---|---|---|---|
-| Demo script | identity-bootstrap-service | Create demo user | JSON |
-| identity-bootstrap-service | Keycloak token endpoint | Get admin token | Form URL encoded |
-| identity-bootstrap-service | Keycloak admin API | Create/update users and roles | JSON |
-| Demo script | Keycloak token endpoint | Get user JWT | Form URL encoded |
-| Client | Kong | Call protected banking API | Usually no body for GET |
-| Kong | Keycloak introspection | Validate token activity | Form URL encoded |
-| Kong | OPA | Ask policy decision | JSON |
-| Kong | banking-api-service | Forward allowed request | Forwarded original request |
+| Sender                     | Receiver                   | Main purpose                  | Body style                 |
+| -------------------------- | -------------------------- | ----------------------------- | -------------------------- |
+| Demo script                | identity-bootstrap-service | Create demo user              | JSON                       |
+| identity-bootstrap-service | Keycloak token endpoint    | Get admin token               | Form URL encoded           |
+| identity-bootstrap-service | Keycloak admin API         | Create/update users and roles | JSON                       |
+| Demo script                | Keycloak token endpoint    | Get user JWT                  | Form URL encoded           |
+| Client                     | Kong                       | Call protected banking API    | Usually no body for GET    |
+| Kong                       | Keycloak introspection     | Validate token activity       | Form URL encoded           |
+| Kong                       | OPA                        | Ask policy decision           | JSON                       |
+| Kong                       | banking-api-service        | Forward allowed request       | Forwarded original request |
 
 ## Why This Level Of Detail Matters
 
