@@ -405,6 +405,550 @@ The script extracts:
 
 ## Flow 5: JWT Claims Produced By Keycloak
 
+Before talking about where the claims come from, it helps to answer three basic questions:
+
+1. what are JWT claims?
+2. why do we need JWT claims?
+3. what problem do JWT claims solve?
+
+## Flow 5A: What JWT Claims Are
+
+JWT claims are named pieces of information stored inside the JWT payload.
+
+You can think of a claim as:
+
+- a key-value fact about the authenticated user or token
+
+Examples of claims are:
+
+- who the user is
+- which system issued the token
+- which application the token is meant for
+- what roles the user has
+- what business-specific attributes belong to the user
+
+In JSON form, claims look like this:
+
+```json
+{
+  "iss": "http://keycloak:8080/realms/banking-poc",
+  "aud": "mobile-banking-app",
+  "preferred_username": "alice",
+  "customer_id": "C-1001",
+  "account_ids": ["A-1001"]
+}
+```
+
+Each field in that JSON object is a claim.
+
+### Standard Claims vs Custom Claims
+
+There are two common types of claims:
+
+#### Standard claims
+
+These are well-known claims defined by JWT/OIDC conventions.
+
+Examples:
+
+- `iss`: issuer
+- `aud`: audience
+- `exp`: expiry time
+- `sub`: subject identifier
+- `iat`: issued-at time
+
+These solve common token-validation problems.
+
+#### Custom claims
+
+These are application-specific claims added for business use.
+
+Examples in this PoC:
+
+- `customer_id`
+- `account_ids`
+
+These solve application-specific authorization problems.
+
+## Flow 5B: Why We Need JWT Claims
+
+After a user logs in, downstream systems still need context.
+
+For example, Kong, OPA, and `banking-api-service` need to know things like:
+
+- who is calling
+- whether the token came from the right issuer
+- whether the token is meant for this application
+- what role the user has
+- which customer/account scope belongs to the user
+
+JWT claims carry that context.
+
+Without claims, every downstream component would have to repeatedly ask another system questions like:
+
+- Who is this user?
+- What roles do they have?
+- Which customer do they belong to?
+- Which accounts are they allowed to access?
+
+Claims let the token carry the important answers.
+
+## Flow 5C: What Problem JWT Claims Solve
+
+JWT claims solve several real distributed-system problems.
+
+### Problem 1: Identity Propagation
+
+Once a user logs in, multiple downstream components need to know who the user is.
+
+Claims solve this by carrying identity information inside the token.
+
+Example:
+
+- `preferred_username = alice`
+- `sub = 134d2448-334d-4be5-8868-4d13085bf2cd`
+
+### Problem 2: Token Validation Context
+
+Services need to know whether the token is trustworthy.
+
+Claims help with that too.
+
+Examples:
+
+- `iss` tells the service who issued the token
+- `aud` tells the service who the token is meant for
+- `exp` tells the service when the token expires
+
+Without these claims, the token would be much harder to validate safely.
+
+### Problem 3: Authorization Context Propagation
+
+A valid identity is not enough.
+
+The system also needs enough information to make authorization decisions.
+
+Claims solve this by carrying authorization-related context.
+
+Examples in this PoC:
+
+- `realm_access.roles = ["customer"]`
+- `customer_id = C-1001`
+- `account_ids = ["A-1001"]`
+
+That lets OPA and Spring Boot decide whether `alice` may access `A-1001`.
+
+### Problem 4: Reducing Repeated Lookups
+
+If every service had to call Keycloak or another database for every request just to learn the caller's identity and scope, the system would become:
+
+- slower
+- more tightly coupled
+- more complex
+
+Claims reduce that repeated lookup cost by carrying the needed context with the request.
+
+## Flow 5D: What JWT Claims Do Not Solve
+
+Claims are useful, but they are not magic.
+
+Claims do not solve:
+
+- policy logic by themselves
+- token trust by themselves
+- stale business data by themselves
+
+Important examples:
+
+- a decoded claim is not automatically trustworthy
+- a valid token can still be unauthorized for a specific action
+- if the source of truth changes, old tokens can still contain older claim values until they expire
+
+That is why this PoC still uses:
+
+- Keycloak introspection in Kong
+- JWT validation in Spring Boot
+- OPA policy evaluation
+- service-side authorization checks
+
+## Flow 5E: Which Claims This PoC Uses And Why
+
+### `iss`
+
+- meaning: who issued the token
+- used by: Spring Boot
+- purpose: reject tokens not issued by this Keycloak realm
+
+### `aud`
+
+- meaning: which client/application the token is meant for
+- used by: Spring Boot
+- purpose: reject tokens not meant for `mobile-banking-app`
+
+### `preferred_username`
+
+- meaning: human-readable username
+- used by: Kong and diagnostics
+- purpose: helpful identity context for logging and policy input
+
+### `realm_access.roles`
+
+- meaning: realm roles assigned to the user
+- used by: Kong, OPA, Spring Boot
+- purpose: distinguish `customer` from `ops-admin`
+
+### `customer_id`
+
+- meaning: business identifier for the banking customer
+- used by: OPA and Spring Boot
+- purpose: connect the authenticated identity to banking ownership context
+
+### `account_ids`
+
+- meaning: which accounts the token claims this user can access
+- used by: OPA and Spring Boot
+- purpose: account-level authorization
+
+## Flow 5F: JWT Claims In This PoC At A Glance
+
+```mermaid
+flowchart LR
+    L[User logs in] --> K[Keycloak issues JWT]
+    K --> C1[Identity claims
+preferred_username sub]
+    K --> C2[Validation claims
+iss aud exp]
+    K --> C3[Authorization claims
+roles customer_id account_ids]
+    C1 --> G[Kong]
+    C2 --> S[Spring Security]
+    C3 --> O[OPA and service guard]
+```
+
+This is the point where many people ask an important question:
+
+- where do these JWT claims actually come from?
+
+The short answer is:
+
+1. `identity-bootstrap-service` writes user attributes into Keycloak
+2. Keycloak protocol mappers copy those attributes into the token
+3. Keycloak signs the JWT
+4. Kong and Spring later read those claims from the JWT payload
+
+So the claims are not invented by Kong or Spring Boot.
+They originate in Keycloak.
+
+## Flow 5G: Where The Claims Come From
+
+### Step 1: Demo User Attributes Are Written Into Keycloak
+
+When `identity-bootstrap-service` creates or updates a user, it sends user attributes like this:
+
+```json
+{
+  "attributes": {
+    "demo_managed": ["true"],
+    "customer_id": ["C-1001"],
+    "account_ids": ["A-1001"]
+  }
+}
+```
+
+That data is produced by the Java code in `KeycloakAdminProvisioner`:
+
+```java
+private Map<String, List<String>> attributes(DemoUserRequest request) {
+    return Map.of(
+            DEMO_MANAGED_ATTRIBUTE, List.of(DEMO_MANAGED_VALUE),
+            "customer_id", List.of(request.customerId()),
+            "account_ids", request.accountIds());
+}
+```
+
+So for `alice`, Keycloak stores:
+
+- `customer_id = C-1001`
+- `account_ids = [A-1001]`
+
+For `ops-admin`, Keycloak stores:
+
+- `customer_id = C-9999`
+- `account_ids = [A-1001, A-2001]`
+
+### Step 2: Realm Roles Are Stored In Keycloak
+
+The bootstrap service also assigns a realm role such as:
+
+- `customer`
+- `ops-admin`
+
+Keycloak automatically places realm roles into the token under:
+
+- `realm_access.roles`
+
+### Step 3: Protocol Mappers Copy Attributes Into The Token
+
+In `infra/keycloak/realm-export.json`, the client `mobile-banking-app` has protocol mappers.
+
+These mappers are the bridge between:
+
+- stored user attributes in Keycloak
+- claims visible in the JWT
+
+For example:
+
+#### `customer_id` mapper
+
+```json
+{
+  "name": "customer_id",
+  "protocolMapper": "oidc-usermodel-attribute-mapper",
+  "config": {
+    "access.token.claim": "true",
+    "claim.name": "customer_id",
+    "user.attribute": "customer_id"
+  }
+}
+```
+
+Meaning:
+
+- read the Keycloak user attribute named `customer_id`
+- place it into the access token claim named `customer_id`
+
+#### `account_ids` mapper
+
+```json
+{
+  "name": "account_ids",
+  "protocolMapper": "oidc-usermodel-attribute-mapper",
+  "config": {
+    "access.token.claim": "true",
+    "claim.name": "account_ids",
+    "user.attribute": "account_ids",
+    "multivalued": "true"
+  }
+}
+```
+
+Meaning:
+
+- read the Keycloak user attribute named `account_ids`
+- place it into the access token claim named `account_ids`
+- keep it as an array because it is multivalued
+
+#### audience mapper
+
+```json
+{
+  "name": "mobile-banking-app-audience",
+  "protocolMapper": "oidc-audience-mapper",
+  "config": {
+    "access.token.claim": "true",
+    "included.client.audience": "mobile-banking-app"
+  }
+}
+```
+
+Meaning:
+
+- add `mobile-banking-app` into the token audience claim
+
+That is why Spring Boot later expects:
+
+- `aud = mobile-banking-app`
+
+## Flow 5H: How The JWT Is Structured
+
+A JWT has three parts:
+
+```text
+header.payload.signature
+```
+
+Each part is Base64URL-encoded.
+
+### JWT Structure Diagram
+
+```mermaid
+flowchart LR
+    H[Header] --> D1[Base64URL]
+    P[Payload Claims] --> D2[Base64URL]
+    S[Signature] --> D3[Base64URL]
+    D1 --> J[header.payload.signature]
+    D2 --> J
+    D3 --> J
+```
+
+### Header
+
+The header describes the token metadata, usually things like:
+
+- signing algorithm
+- key ID
+- token type
+
+Example:
+
+```json
+{
+  "alg": "RS256",
+  "typ": "JWT",
+  "kid": "..."
+}
+```
+
+### Payload
+
+The payload contains the claims.
+
+This is the part Kong decodes in the plugin when it wants to read values like:
+
+- `preferred_username`
+- `customer_id`
+- `account_ids`
+- `realm_access.roles`
+
+Example payload shape in this PoC:
+
+```json
+{
+  "iss": "http://keycloak:8080/realms/banking-poc",
+  "aud": "mobile-banking-app",
+  "preferred_username": "alice",
+  "realm_access": {
+    "roles": ["customer"]
+  },
+  "customer_id": "C-1001",
+  "account_ids": ["A-1001"]
+}
+```
+
+### Signature
+
+The signature proves the token was signed by the issuer.
+
+Important security idea:
+
+- decoding the payload is easy
+- trusting the payload is not safe until the token is validated
+
+That is why this PoC does not rely on raw decoding alone.
+
+## Flow 5I: Why Kong Can Decode Claims But Still Must Validate
+
+The Kong plugin contains code that decodes the JWT payload segment:
+
+```lua
+local function decode_claims(token)
+  local payload_segment = token:match("^[^.]+%.([^.]+)%.([^.]+)$")
+  ...
+  return cjson.decode(decoded)
+end
+```
+
+This lets Kong read claims from the payload.
+
+But payload decoding alone is not enough, because anyone can create a fake string that looks like a JWT.
+
+So the plugin first calls Keycloak introspection:
+
+1. Kong receives bearer token
+2. Kong calls Keycloak introspection endpoint
+3. Keycloak responds with `active: true` or `active: false`
+4. only then does Kong use the decoded payload to build OPA input
+
+That is the difference between:
+
+- reading claims
+- trusting claims
+
+## Flow 5J: How Spring Boot Retrieves The Same Claims
+
+Spring Boot does not parse claims by doing manual Base64 decoding.
+
+Instead:
+
+1. Spring Security validates the JWT
+2. it creates a `Jwt` principal object
+3. controller and guard code read claims from that validated `Jwt`
+
+Examples from the banking service:
+
+- `jwt.getClaimAsString("customer_id")`
+- `jwt.getClaimAsStringList("account_ids")`
+- reading `realm_access.roles`
+
+So the same claim values are used in two places:
+
+- Kong -> OPA path
+- Spring service-side defense-in-depth path
+
+## Flow 5K: End-To-End Claim Pipeline For `alice`
+
+```mermaid
+flowchart LR
+    A[Demo request for alice] --> B[identity-bootstrap-service]
+    B --> C[Keycloak user attributes:
+customer_id=C-1001
+account_ids=A-1001]
+    C --> D[Keycloak protocol mappers]
+    D --> E[JWT payload claims:
+customer_id
+account_ids
+aud
+realm_access.roles]
+    E --> F[Kong decodes claims after introspection]
+    E --> G[Spring Security validates and exposes Jwt claims]
+    F --> H[OPA input]
+    G --> I[service-side account guard]
+```
+
+### Concrete Example For `alice`
+
+Input stored in Keycloak user profile:
+
+```json
+{
+  "customer_id": ["C-1001"],
+  "account_ids": ["A-1001"]
+}
+```
+
+Role assigned in Keycloak:
+
+```json
+{
+  "realm_access": {
+    "roles": ["customer"]
+  }
+}
+```
+
+Audience added by mapper:
+
+```json
+{
+  "aud": "mobile-banking-app"
+}
+```
+
+Final useful payload seen by the rest of the system:
+
+```json
+{
+  "iss": "http://keycloak:8080/realms/banking-poc",
+  "aud": "mobile-banking-app",
+  "preferred_username": "alice",
+  "realm_access": {
+    "roles": ["customer"]
+  },
+  "customer_id": "C-1001",
+  "account_ids": ["A-1001"]
+}
+```
+
 Important claims in this PoC token include:
 
 ```json
