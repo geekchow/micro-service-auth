@@ -385,19 +385,114 @@ username=alice
 password=Password123!
 ```
 
+Curl example:
+
+```bash
+curl -sS -X POST 'http://localhost:9081/realms/banking-poc/protocol/openid-connect/token' \
+  -H 'Content-Type: application/x-www-form-urlencoded' \
+  --data-urlencode 'grant_type=password' \
+  --data-urlencode 'client_id=mobile-banking-app' \
+  --data-urlencode 'username=alice' \
+  --data-urlencode 'password=Password123!'
+```
+
 ### Response
 
 Keycloak returns JSON like:
 
 ```json
 {
-  "access_token": "<jwt>",
+  "access_token": "eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICIwQlllazY2dWVidWVjODRCcXhmd0o5X3F4SURyMVdrYS0xc2lCVDJ6MExrIn0.eyJleHAiOjE3ODE1ODA4MDQsImlhdCI6MTc4MTU4MDUwNCwianRpIjoiYzJjMWIyMzctMTUwMS00NjAyLWE0MmYtZjNiN2E1YTY5NTkwIiwiaXNzIjoiaHR0cDovL2tleWNsb2FrOjgwODAvcmVhbG1zL2JhbmtpbmctcG9jIiwiYXVkIjoibW9iaWxlLWJhbmtpbmctYXBwIiwic3ViIjoiMTM0ZDI0NDgtMzM0ZC00YmU1LTg4NjgtNGQxMzA4NWJmMmNkIiwidHlwIjoiQmVhcmVyIiwiYXpwIjoibW9iaWxlLWJhbmtpbmctYXBwIiwic2lkIjoiMzFmZDFjNjYtNDkzMC00NTM4LThmNmUtMDkxZTlhYjlmYjBjIiwiYWNyIjoiMSIsInJlYWxtX2FjY2VzcyI6eyJyb2xlcyI6WyJjdXN0b21lciJdfSwic2NvcGUiOiJlbWFpbCBwcm9maWxlIiwiYWNjb3VudF9pZHMiOlsiQS0xMDAxIl0sImVtYWlsX3ZlcmlmaWVkIjpmYWxzZSwibmFtZSI6ImFsaWNlIERlbW8iLCJwcmVmZXJyZWRfdXNlcm5hbWUiOiJhbGljZSIsImdpdmVuX25hbWUiOiJhbGljZSIsImN1c3RvbWVyX2lkIjoiQy0xMDAxIiwiZmFtaWx5X25hbWUiOiJEZW1vIiwiZW1haWwiOiJhbGljZUBleGFtcGxlLmxvY2FsIn0.L-ixwkwJRbbhW7C6ToR7fQpQIwN3EaBRKab3hvASmLuog0RyQM2ZkMIqVSzmcZCYQlgvbKzOWrI3SpKTTrGWowRnsU0Y0_gWZe6pIc4UUxOWfLrqmNcQAUP_IG5d8yf1hvQQuYhzOYvLGi6ckxc_MHmyfdoWWUNKrHxjOKmVwjAi7ib7syZh8K_6lEhQawPsno-kMwKJ17Yw0IDavzy4xiD06IoOYnmnS-jr0bmNrNgRfs92RtmztyBPUU2_V82Tj1hQ7X5oAiB1f-0Xss_oVcsUYYQNxDtsx2SsqLY21AVhvzgz-yctClt4tG8MhNUJr0z7mlbd11vTuFqSf6d6Tw",
   "expires_in": 300,
   "refresh_expires_in": 1800,
+  "refresh_token": "eyJhbGciOiJIUzUxMiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICJlY2VlNGJhYy0zNTc3LTQyNGQtODk2Zi0yYmY2OGJiN2RmNzIifQ.eyJleHAiOjE3ODE1ODIzMDQsImlhdCI6MTc4MTU4MDUwNCwianRpIjoiZTMwNmE4YjItZjIyNi00ODFhLTk3NGEtYWQ4OTRkNzFkYzU4IiwiaXNzIjoiaHR0cDovL2tleWNsb2FrOjgwODAvcmVhbG1zL2JhbmtpbmctcG9jIiwiYXVkIjoiaHR0cDovL2tleWNsb2FrOjgwODAvcmVhbG1zL2JhbmtpbmctcG9jIiwic3ViIjoiMTM0ZDI0NDgtMzM0ZC00YmU1LTg4NjgtNGQxMzA4NWJmMmNkIiwidHlwIjoiUmVmcmVzaCIsImF6cCI6Im1vYmlsZS1iYW5raW5nLWFwcCIsInNpZCI6IjMxZmQxYzY2LTQ5MzAtNDUzOC04ZjZlLTA5MWU5YWI5ZmIwYyIsInNjb3BlIjoiZW1haWwgcHJvZmlsZSBiYXNpYyBhY3Igcm9sZXMgd2ViLW9yaWdpbnMifQ.pAFHfn_B43gH7vmNfsMgOhgGCEvl9LtvgniZmALfrqiQz3Lyiwl_pCdjNHiqw-YXQ8oGu7ebArH5EhdSeL-qBA",
   "token_type": "Bearer",
+  "not-before-policy": 0,
+  "session_state": "31fd1c66-4930-4538-8f6e-091e9ab9fb0c",
   "scope": "email profile"
 }
 ```
+
+The `access_token` field is the signed JWT itself.
+Its payload contains the identity and authorization claims that later components read after validation.
+
+### JWT Decode Example
+
+The returned `access_token` is a JWT in this format:
+
+```text
+header.payload.signature
+```
+
+For the example above, decoding the first two segments gives the following content.
+
+Decoded header:
+
+```json
+{
+  "alg": "RS256",
+  "typ": "JWT",
+  "kid": "0BYek66uebuec84BqxfwJ9_qxIDr1Wka-1siBT2z0Lk"
+}
+```
+
+This header tells us that Keycloak signed the token with `RS256` and identifies the signing key with `kid`.
+
+Decoded payload:
+
+```json
+{
+  "exp": 1781580804,
+  "iat": 1781580504,
+  "jti": "c2c1b237-1501-4602-a42f-f3b7a5a69590",
+  "iss": "http://keycloak:8080/realms/banking-poc",
+  "aud": "mobile-banking-app",
+  "sub": "134d2448-334d-4be5-8868-4d13085bf2cd",
+  "typ": "Bearer",
+  "azp": "mobile-banking-app",
+  "sid": "31fd1c66-4930-4538-8f6e-091e9ab9fb0c",
+  "acr": "1",
+  "realm_access": {
+    "roles": ["customer"]
+  },
+  "scope": "email profile",
+  "account_ids": ["A-1001"],
+  "email_verified": false,
+  "name": "alice Demo",
+  "preferred_username": "alice",
+  "given_name": "alice",
+  "customer_id": "C-1001",
+  "family_name": "Demo",
+  "email": "alice@example.local"
+}
+```
+
+In this decoded payload, you can see the actual claims that the rest of the system uses, such as:
+
+- `iss`: the issuing realm
+- `aud`: the intended client application
+- `preferred_username`: the human-readable username
+- `realm_access.roles`: the user's role
+- `customer_id`: the banking customer scope
+- `account_ids`: the accounts this token carries
+
+### Signature
+
+The third JWT segment is the signature.
+
+It is a cryptographic proof created by Keycloak when the token is issued.
+Keycloak generates it by signing the header and payload with Keycloak's private key.
+Downstream systems verify it with Keycloak's public key.
+
+This is what makes the token trustworthy:
+
+- if the header or payload is changed after issuance, the signature no longer matches and verification fails
+- if the token was not issued by Keycloak, the signature cannot be verified with Keycloak's public key
+- if the token is only decoded but not verified, the claims are readable but not trustworthy
+
+So the rule is simple: decoding lets you inspect the claims, but signature verification or introspection is what lets you trust them.
+
+You can decode the header and payload locally to inspect them, but you must still validate the signature or introspect the token before trusting those values.
 
 The script extracts:
 
@@ -1142,7 +1237,52 @@ GET /api/accounts/A-1001 HTTP/1.1
 Authorization: Bearer <jwt>
 ```
 
-The banking service receives the bearer token and Spring Security turns it into a validated `Jwt` principal.
+The banking service receives the bearer token and Spring Security treats it as the service's own authentication boundary.
+
+At a high level, Flow 9 works like this:
+
+```mermaid
+flowchart LR
+  A[Kong forwards request with Bearer token] --> B[Spring Security filter chain]
+  B --> C[JwtDecoder verifies signature]
+  C --> D[Issuer and audience validators run]
+  D --> E[Authenticated Jwt principal is created]
+  E --> F[Controller receives Jwt via @AuthenticationPrincipal]
+  F --> G[AccountAccessGuard checks claims]
+  G --> H[Repository returns account data or service rejects request]
+```
+
+For this PoC, that validation is driven by the banking service config in [services/banking-api-service/src/main/resources/application.yml](/Users/phil.g.s.zhou/hsbc/dsp3/draft/services/banking-api-service/src/main/resources/application.yml):
+
+- `spring.security.oauth2.resourceserver.jwt.jwk-set-uri` tells Spring where to fetch Keycloak's public keys
+- `banking-api.security.issuer-uri` tells Spring which Keycloak realm must have issued the token
+- `banking-api.security.audience` tells Spring which client the token must be meant for
+
+What that means in practice:
+
+1. Spring extracts the bearer token from the `Authorization` header.
+2. `NimbusJwtDecoder` loads the JWKs from the configured JWKS endpoint.
+3. The JWT signature is verified against Keycloak's public key.
+4. The issuer must match the configured realm URI.
+5. The audience must contain `mobile-banking-app`.
+6. If any of those checks fail, Spring Security returns `401 Unauthorized` and the controller is never called.
+
+Once the token is accepted, Spring injects the validated token into the controller method as `@AuthenticationPrincipal Jwt jwt`.
+
+Then the banking service applies its own authorization guard before returning data:
+
+- `ops-admin` can access any account
+- `customer` must have a non-empty `customer_id`
+- `customer` must have the requested `accountId` in `account_ids`
+- for the account details endpoint, the account record must also match both `customer_id` and `account_ids`
+
+If the token is missing or the claims do not match the requested account, the guard throws `401` or `403` accordingly.
+That means the banking API is protected twice:
+
+- by Spring Security's JWT validation at the edge of the service
+- by `AccountAccessGuard` inside the controller path using token claims
+
+For the signature and trust model behind that verification, see [09-jwt-signature-validation.md](/Users/phil.g.s.zhou/hsbc/dsp3/draft/docs/09-jwt-signature-validation.md).
 
 Then the service reads claims such as:
 

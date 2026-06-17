@@ -28,6 +28,14 @@ This directory contains the explanation and walkthrough documents for the mobile
 8. `08-request-response-details.md`
    - low-level headers, bodies, claims, and responses between components
 
+9. `09-opa-integration.md`
+   - how OPA works from policy-engine principles to the actual Rego, tests, and runtime integration in this project
+   - includes the banking API JWT validation config used in Flow 10
+
+9. `09-jwt-signature-validation.md`
+   - how JWT signatures, validation, introspection, and trust boundaries work with Keycloak
+   - the deeper explanation behind the Flow 10 banking API validation settings
+
 ## Design And Planning Docs
 
 - `superpowers/specs/2026-06-05-mobile-banking-auth-design.md`
