@@ -200,6 +200,258 @@ For this repo, what matters is:
 3. Keycloak returns a JWT access token
 4. that token is sent to Kong and the banking API path
 
+## How Keycloak Tracks Sessions And Token Activity
+
+One important question is:
+
+- if access tokens are JWTs, how can Keycloak still tell whether a token is active or inactive during introspection?
+
+The answer is:
+
+- Keycloak does not rely only on the JWT string
+- Keycloak also keeps server-side session state
+
+## Access Token vs Session State
+
+An access token is a token the client presents.
+
+A session is server-side state kept by Keycloak.
+
+These are related, but they are not the same thing.
+
+In simple terms:
+
+- the JWT carries identity and claim data
+- Keycloak keeps live session information on the server side
+
+That is why a token can be:
+
+- structurally valid as a JWT
+- but still inactive from Keycloak's point of view
+
+## What Keycloak Usually Keeps Server-Side
+
+Keycloak mainly keeps session-related state such as:
+
+- user session
+- client session
+- realm and client validity state
+- logout and invalidation state
+
+You can think of it as Keycloak remembering:
+
+- this user logged in
+- this login belongs to a specific client
+- this session is still alive, expired, logged out, or invalidated
+
+## How Keycloak Stores Session Data
+
+When people ask "where is the session", there are two useful views:
+
+- logical session types (what Keycloak tracks)
+- physical storage (where that state lives at runtime)
+
+### Logical Session Types
+
+Keycloak usually tracks three layers of session state:
+
+1. Authentication session (short-lived)
+  - temporary state during the login flow
+  - removed after login completes or expires
+2. User session (main logged-in session)
+  - represents the authenticated user session in a realm
+  - linked to things like start time, idle/expiry state, and logout status
+3. Client session (per client app)
+  - attached to a user session for each client such as `mobile-banking-app`
+  - tracks client-specific participation in that login session
+
+### Physical Storage In Keycloak
+
+At runtime, Keycloak stores online session state primarily in Infinispan caches.
+
+In clustered deployments, these caches are distributed/replicated across nodes so session state can be shared.
+
+Offline sessions are persisted in the database.
+For online session persistence, behavior can vary by Keycloak version and deployment configuration.
+
+The key practical point is:
+
+- token claims are carried in the JWT
+- live session activity is maintained server-side by Keycloak
+
+That is why a token can decode correctly, but introspection can still return inactive if the backing session state is no longer valid.
+
+## What Happens During Introspection
+
+When Kong calls the introspection endpoint, Keycloak does more than just decode the JWT.
+
+At a high level, Keycloak checks things like:
+
+1. can the token be parsed?
+2. is the token cryptographically acceptable?
+3. is the token expired?
+4. is the user session still active?
+5. is the client session still active?
+6. has logout, revocation, or invalidation made this token unusable?
+
+If those checks pass, Keycloak returns:
+
+```json
+{
+  "active": true
+}
+```
+
+If they do not pass, Keycloak returns:
+
+```json
+{
+  "active": false
+}
+```
+
+So introspection is really answering:
+
+- does Keycloak still consider this token usable right now?
+
+## Why Keycloak Can Judge Whether A Token Is Still Active
+
+This is the key reason introspection is useful.
+
+Keycloak is not only the issuer of the JWT.
+It is also the owner of the live session state behind that JWT.
+
+That means Keycloak knows things the token string alone does not fully prove at request time.
+
+For example, Keycloak can know whether:
+
+- the user logged out
+- the login session expired
+- the client session expired
+- the user was disabled
+- the client was disabled
+- a realm or client invalidation event made older tokens unusable
+
+So when Keycloak receives an introspection request, it is not just asking:
+
+- "Does this JWT look well-formed?"
+
+It is also asking:
+
+- "Does this token still belong to a live, acceptable session according to Keycloak right now?"
+
+That is why Keycloak can return:
+
+- `active: false`
+
+even when:
+
+- the token still decodes as a JWT
+- the claims are readable
+- the token has not yet reached its `exp` claim
+
+The JWT carries token data.
+Keycloak keeps the session truth.
+
+This is the most important mental model for introspection.
+
+## How Access Token And Refresh Token Relate To Session State
+
+### Access token
+
+The access token is:
+
+- a short-lived bearer token
+- usually self-contained
+- used to call APIs
+
+It carries claims and can often be validated locally by services using JWKS.
+
+### Refresh token
+
+The refresh token is:
+
+- used to get a new access token
+- more directly tied to the ongoing Keycloak session
+
+If the session is gone, expired, or invalidated, refresh stops working.
+
+So:
+
+- access token = API call token
+- refresh token = session continuation token
+
+The difference matters because Keycloak can often validate an access token locally by its content and signature, while the refresh token is more directly bound to whether the Keycloak session is still alive.
+
+In practice, that means:
+
+- access token answers: "can this token present claims to an API?"
+- refresh token answers: "can this client continue the login session and get a new access token?"
+
+If the session is dead, refresh stops working even if an old access token still exists somewhere.
+
+## Why Keycloak Can Return `active: false` Even For A JWT
+
+This is one of the most important ideas in the whole stack.
+
+Because Keycloak keeps server-side session state, it can say a token is inactive even if:
+
+- the token still looks like a valid JWT
+- the claims can still be decoded
+- the token has not yet reached its `exp` timestamp
+
+Examples of why Keycloak may return `active: false`:
+
+- the user logged out
+- the session expired
+- the client was disabled
+- the user was disabled
+- a realm or client invalidation event occurred
+
+So the token string alone is not the whole truth.
+
+## Why This Matters To This PoC
+
+In this project:
+
+- Kong introspects the token with Keycloak
+- `banking-api-service` validates JWT signature, issuer, and audience locally
+
+These two checks complement each other.
+
+### Kong asks:
+
+- is this token still active according to Keycloak right now?
+
+### `banking-api-service` asks:
+
+- was this JWT really signed by Keycloak, and is it meant for this service?
+
+That is why both exist in the PoC.
+
+## Session And Token Relationship Diagram
+
+```mermaid
+flowchart LR
+    U[User login] --> K[Keycloak]
+    K --> S[Server-side session state]
+    K --> T[Access token and refresh token]
+    T --> G[Kong introspection]
+    S --> G
+    T --> B[banking-api-service JWT validation]
+```
+
+## Practical Mental Model
+
+Use this mental model:
+
+- Keycloak issues the token
+- Keycloak also remembers the session
+- JWT validation checks whether the token is cryptographically trustworthy
+- introspection checks whether the session behind the token is still alive
+
+That is how Keycloak can judge whether an access token is still active.
+
 ## Token Issuance And Validation Flow
 
 ```mermaid

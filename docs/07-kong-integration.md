@@ -340,6 +340,45 @@ Key configuration values:
 - `introspection_client_id`
 - `introspection_client_secret`
 
+### Why Kong Uses Introspection Instead Of JWKS
+
+Kong and `banking-api-service` are solving slightly different security problems.
+
+Kong is the edge PEP.
+Before it trusts a token enough to ask OPA for an authorization decision, it wants a live answer from Keycloak.
+
+So Kong asks:
+
+- is this token still active right now?
+
+That is what introspection gives Kong.
+
+Why this matters at the gateway:
+
+- a token may still decode correctly as a JWT
+- a token may still look cryptographically valid
+- but Keycloak may already consider it inactive because of logout, revocation, or session expiry
+
+For an edge enforcement point, that live status check is valuable.
+
+If Kong used only JWKS-based local JWT validation, it could verify:
+
+- signature
+- issuer
+- audience
+- expiry
+
+But it would not automatically get the live Keycloak session answer that introspection provides.
+
+So the design in this PoC is:
+
+- Kong introspection = live token activity check at the edge
+- Spring JWKS validation = fast local cryptographic validation inside the service
+
+That is why Kong does not rely on JWKS alone here.
+
+It wants the stronger, source-of-truth answer from Keycloak before building OPA input.
+
 ### Kong And OPA
 
 Relationship:
