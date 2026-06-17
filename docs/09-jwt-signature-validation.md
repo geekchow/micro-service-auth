@@ -204,6 +204,125 @@ Why this is stronger than decoding alone:
 - a valid-looking JWT can still be inactive or revoked
 - Keycloak is the source of truth for whether the token should still be accepted
 
+## Why `banking-api-service` Uses JWKS Instead Of Introspection For JWT Validation
+
+This is an important design question.
+
+In this PoC:
+
+- Kong uses Keycloak introspection to check whether the token is still active
+- `banking-api-service` uses JWKS to verify that the JWT is cryptographically valid and meant for this service
+
+These two mechanisms are related, but they do not solve exactly the same problem.
+
+### Why the Spring Service Prefers JWKS Validation
+
+#### 1. It is local and fast
+
+After Spring downloads Keycloak's public keys from the JWKS endpoint, it can validate JWTs locally.
+
+That means:
+
+- no network round-trip is needed for every API request
+- validation is usually faster
+
+If the service used introspection for every request, every API call would require a live call back to Keycloak.
+
+#### 2. JWTs are designed for this pattern
+
+This PoC uses self-contained JWT access tokens.
+
+A self-contained JWT already carries:
+
+- claims
+- expiry
+- issuer
+- audience
+- signature
+
+That makes it natural for a resource server to:
+
+- verify the JWT locally with JWKS
+- then trust the claims if validation succeeds
+
+This is the normal pattern for a Spring Security JWT resource server.
+
+#### 3. Better resilience
+
+If Keycloak is briefly slow or unavailable, local JWT validation can still work for already-issued tokens, as long as the service already has the needed public keys.
+
+If the service depended on introspection for every request, then every protected API call would depend on live Keycloak availability.
+
+So JWKS validation makes the service less tightly coupled to Keycloak at request time.
+
+#### 4. Cleaner resource-server boundary
+
+`banking-api-service` is acting as a resource server.
+
+Spring Security resource-server support is built exactly for this pattern:
+
+- bearer JWT
+- public key discovery through JWKS
+- issuer validation
+- audience validation
+
+So using JWKS is not a workaround. It is the standard and efficient model for this kind of service.
+
+## What Introspection Gives That JWKS Validation Does Not
+
+JWKS validation answers:
+
+- was this token signed by the trusted issuer?
+- does it have the right issuer, audience, and expiry?
+
+Introspection adds something different:
+
+- a live answer from Keycloak about whether the token is still active right now
+
+That is useful for cases such as:
+
+- logout
+- revocation
+- session expiry
+- admin-side invalidation
+- other server-side state changes in Keycloak
+
+So introspection is stronger as a live status check.
+
+## Why This Architecture Uses Both
+
+This PoC deliberately uses both mechanisms, but in different places.
+
+### Kong introspection
+
+Purpose:
+
+- live token activity check at the edge
+
+Meaning:
+
+- Kong asks Keycloak whether the token is active before it trusts the token enough to build OPA input
+
+### Spring JWT validation with JWKS
+
+Purpose:
+
+- local cryptographic verification inside the service
+- issuer and audience enforcement
+- defense in depth
+
+Meaning:
+
+- the service does not blindly trust that the gateway already checked everything
+- the service still validates the JWT as its own trust boundary
+
+## Short Version
+
+- introspection = live status check
+- JWKS validation = local cryptographic trust check
+
+And `banking-api-service` uses JWKS because that is the normal, efficient pattern for a JWT-based Spring resource server.
+
 ## What Claims Are Used For
 
 Claims carry identity and authorization context.
@@ -243,5 +362,4 @@ That gives two layers of trust:
 The signature is what makes the token tamper-evident.
 Validation is what makes it acceptable.
 Introspection is what makes it a live answer from Keycloak.
-
 
