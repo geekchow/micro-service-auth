@@ -1,122 +1,125 @@
-# 02 This Project Architecture
+# 02 — This Project Architecture
 
-This file maps the concepts to the actual components in this PoC.
+This file maps the abstract security roles from [01 — Concepts](01-concepts.md) to the actual components running in this PoC.
 
-## Components In This Repo
+> **Part I · Foundations** — Prereqs: [01](01-concepts.md)
 
-- `Keycloak`
-- `Kong`
-- `OPA`
-- `banking-api-service`
-- `identity-bootstrap-service`
+## Components
 
-## Role Of Each Component
+| Component | Role |
+|---|---|
+| `Keycloak` | [IdP](01-concepts.md#idp) |
+| `Kong` | [PEP](01-concepts.md#pep) |
+| `OPA` | [PDP](01-concepts.md#pdp) |
+| `banking-api-service` | [Resource server](01-concepts.md#glossary) |
+| `identity-bootstrap-service` | Demo setup only |
+
+## Role of Each Component
 
 ### Keycloak
 
-Keycloak is the identity provider.
+`Keycloak` is the [IdP](01-concepts.md#idp) for this project.
 
-It is responsible for:
+It:
 
-- storing demo users
-- authenticating username and password
-- issuing JWT access tokens
-- adding claims such as `customer_id` and `account_ids`
+- stores demo users (`alice`, `ops-admin`)
+- authenticates username and password
+- issues JWT access tokens
+- adds claims such as `customer_id` and `account_ids`
 
 ### Kong
 
-Kong is the edge gateway and the main PEP.
+`Kong` is the [PEP](01-concepts.md#pep) for this project.
 
-It is responsible for:
+It:
 
-- receiving client requests first
-- checking that a bearer token exists
-- introspecting the token with Keycloak
-- calling OPA for an authorization decision
-- forwarding allowed requests to the banking API
+- receives every client request at the edge
+- checks that a bearer token exists
+- introspects the token with `Keycloak`
+- calls `OPA` for an authorization decision
+- forwards allowed requests to `banking-api-service`
 
 ### OPA
 
-OPA is the PDP.
+`OPA` is the [PDP](01-concepts.md#pdp) for this project.
 
-It is responsible for:
+It:
 
-- reading request context from Kong
-- evaluating Rego policy
-- returning `allow` or `deny`
+- receives request context from `Kong`
+- evaluates the Rego policy in `infra/opa/policies/banking_authz.rego`
+- returns `allow` or `deny`
 
 ### banking-api-service
 
-The banking API service is the protected business API.
+`banking-api-service` is the [resource server](01-concepts.md#glossary) for this project.
 
-It is responsible for:
+It:
 
-- validating JWT signature, issuer, and audience
-- checking account access again as defense in depth
-- returning account and transaction data
+- validates the JWT signature, issuer, and audience
+- checks account ownership again as defense in depth
+- returns account and transaction data
 
 ### identity-bootstrap-service
 
-The bootstrap service exists only for the PoC.
+`identity-bootstrap-service` exists only to make the PoC repeatable.
 
-It is responsible for:
+It:
 
-- creating demo-managed users in Keycloak
-- setting demo claims and roles
-- making the demo repeatable without manual Keycloak work
-
-## Why This Architecture Makes Sense
-
-This design separates concerns cleanly:
-
-- Keycloak handles identity
-- Kong protects the edge
-- OPA owns policy logic
-- Spring Boot services focus on application logic
-
-It also demonstrates defense in depth:
-
-- Kong checks token activity and calls OPA
-- banking-api-service validates the JWT again
-- banking-api-service also checks account ownership again
+- creates demo users (`alice`, `ops-admin`) in `Keycloak`
+- sets demo claims and roles
+- removes the need for manual `Keycloak` setup steps
 
 ## Architecture Diagram
 
 ```mermaid
 flowchart LR
-  C[Client] -->|1. login| KC[Keycloak]
-  KC -->|2. JWT access token| C
+  identity-bootstrap-service -->|0. create demo users| Keycloak
 
-  C -->|3. API request with JWT| KG[Kong Gateway]
-  KG -->|4. introspect token| KC
-  KG -->|5. policy input| OPA[OPA]
-  OPA -->|6. allow or deny| KG
-  KG -->|7. allowed request| BANK[banking-api-service]
+  Client -->|1. login| Keycloak
+  Keycloak -->|2. JWT access token| Client
 
-  DEMO[identity-bootstrap-service] -->|0. create demo users| KC
+  Client -->|3. API request with JWT| Kong
+  Kong -->|4. introspect token| Keycloak
+  Kong -->|5. policy input| OPA
+  OPA -->|6. allow or deny| Kong
+  Kong -->|7. allowed request| banking-api-service
 
-    subgraph Security Layers
-      KG
-      OPA
-      BANK
-    end
+  subgraph Security Layers
+    Kong
+    OPA
+    banking-api-service
+  end
 ```
+
+## Why This Architecture Makes Sense
+
+The three-role separation keeps concerns isolated:
+
+- `Keycloak` owns identity — no other component stores credentials.
+- `OPA` owns policy logic — changing a rule means editing one Rego file.
+- `Kong` owns enforcement — services behind Kong do not need to re-implement gateway logic.
+
+Defense in depth is also demonstrated:
+
+- `Kong` checks token validity and calls `OPA` before forwarding.
+- `banking-api-service` validates the JWT again independently.
+- `banking-api-service` re-checks account ownership before returning data.
 
 ## Project File Mapping
 
-- `docker-compose.yml`: runtime topology
-- `infra/keycloak/realm-export.json`: Keycloak realm and client setup
-- `infra/kong/kong.yml`: Kong service and plugin config
-- `infra/kong/plugins/opa-authz/handler.lua`: Kong plugin logic
-- `infra/opa/policies/banking_authz.rego`: OPA policy
-- `services/banking-api-service/`: protected banking APIs
-- `services/identity-bootstrap-service/`: demo user provisioning
+| Path | Purpose |
+|---|---|
+| `docker-compose.yml` | Defines and wires all runtime containers |
+| `infra/keycloak/realm-export.json` | Keycloak realm, client, and role configuration |
+| `infra/kong/kong.yml` | Kong services, routes, and plugin config |
+| `infra/kong/plugins/opa-authz/handler.lua` | Kong plugin — calls OPA and enforces the decision |
+| `infra/kong/plugins/opa-authz/schema.lua` | Kong plugin — declares configuration schema |
+| `infra/opa/policies/banking_authz.rego` | OPA policy (Rego) |
+| `infra/opa/policies/banking_authz_test.rego` | OPA policy unit tests |
+| `services/banking-api-service/` | Protected banking API (resource server) |
+| `services/identity-bootstrap-service/` | Demo user provisioning service |
+| `scripts/demo.sh` | End-to-end demo script |
 
-## Main Security Idea In This Repo
+---
 
-The most important architecture idea is this:
-
-- identity is created by Keycloak
-- authorization is decided by OPA
-- enforcement happens at Kong
-- verification also happens inside the banking service
+← Prev: [01 — Concepts](01-concepts.md) · Next: [03 — Request Flows](03-request-flows.md) →
