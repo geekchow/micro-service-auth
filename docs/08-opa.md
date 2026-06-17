@@ -1,55 +1,46 @@
-# 09 OPA Integration
+# 08 — OPA (PDP)
 
-This file explains how `OPA` works from underlying principle to practical use in this PoC.
+`OPA` is the Policy Decision Point: it receives authorization input from `Kong` and returns `allow` or `deny`.
 
-It combines three things:
-
-- the idea behind OPA as a policy engine
-- the actual Rego policy in this repo
-- the runtime wiring from `docker-compose.yml`
+> **Part II · Component Deep Dives** — Prereqs: [01](01-concepts.md), [07](07-kong.md)
 
 ## What OPA Is
 
-`OPA` means `Open Policy Agent`.
+`OPA` stands for Open Policy Agent.
 
-OPA is a policy engine.
+In this project, `OPA` is the `PDP` (Policy Decision Point) — see [01 — Concepts](01-concepts.md) for the full IdP / PEP / PDP glossary.
 
-In this project, OPA is the `PDP`, which means `Policy Decision Point`.
+`OPA` does one job:
 
-That means OPA does not sit at the edge like Kong, and it does not authenticate users like Keycloak.
+- receive a structured input document
+- evaluate it against Rego policy rules
+- return a decision: `allow` or `deny`
 
-Instead, OPA does one job:
-
-- receive policy input
-- evaluate policy rules
-- return a decision
-
-Typical decisions are:
-
-- allow
-- deny
+`OPA` does not authenticate users. That is `Keycloak`'s role.
+`OPA` does not enforce the decision at the edge. That is `Kong`'s role.
+`OPA` only decides.
 
 ## Why This Project Needs OPA
 
-This project could have placed all authorization logic directly inside:
+Authorization logic could have been written directly inside:
 
-- Kong plugin code
-- Spring Boot service code
+- `Kong` plugin code
+- `banking-api-service` Java code
 
-But that would mix policy logic with enforcement logic or business logic.
+But that would couple policy to enforcement or business logic.
 
-Using OPA gives three important benefits:
+Using `OPA` as a dedicated `PDP` gives three concrete benefits:
 
-1. policy stays separate from application code
-2. policy can be tested independently
-3. policy can change without rewriting the whole gateway or service logic
+1. Policy stays separate from gateway and service code.
+2. Policy can be tested independently with `rego test`.
+3. Policy can change without rewriting `Kong` plugins or `banking-api-service`.
 
 In this PoC:
 
-- Keycloak proves who the user is
-- Kong enforces at the edge
-- OPA decides whether the action is allowed
-- Spring Boot adds defense in depth
+- `Keycloak` proves who the user is.
+- `Kong` enforces at the edge (`PEP`).
+- `OPA` decides whether the action is allowed (`PDP`).
+- `banking-api-service` adds defense in depth (resource server).
 
 ## Where OPA Sits In The Architecture
 
@@ -65,87 +56,52 @@ flowchart LR
     B -. business response .-> G
 ```
 
-Important point:
+`OPA` sits between `Kong` and the upstream `banking-api-service`. Kong calls `OPA` synchronously on every request, waits for the decision, then either forwards the request or returns `403`.
 
-- OPA never logs the user in
-- OPA never issues the JWT
-- OPA never serves the banking data
+## The Input → Policy → Result Model
 
-OPA only answers the authorization question.
+`OPA` is a general-purpose engine. It does not know what a bank account is by itself. It only knows:
 
-## The Underlying Principle Behind OPA
-
-OPA is based on a simple model:
-
-1. some system sends `input`
-2. OPA evaluates that input against policy rules
-3. OPA returns `result`
-
-In this repo:
-
-- Kong sends the `input`
-- Rego policy defines the rules
-- OPA returns `result: true` or `result: false`
-
-### Input -> Policy -> Result
+1. what input it received
+2. what rules were written in Rego
 
 ```mermaid
 flowchart LR
     I[Input JSON] --> P[Rego Policy]
-    P --> R[Result true or false]
+    P --> R[result: true or false]
 ```
 
-This pattern is important because it keeps OPA generic.
+In this repo:
 
-OPA does not know what a bank account is by itself.
-OPA only knows:
+- `Kong` constructs and sends the `input`
+- `banking_authz.rego` defines the rules
+- `OPA` returns `result: true` or `result: false`
 
-- what input it received
-- what rules were written in policy
+## Rego Basics
 
-## Rego Basics In Plain English
+`OPA` policies are written in `Rego`, a declarative language.
 
-OPA policies are usually written in `Rego`.
+You describe what must be true for access to be granted, rather than writing step-by-step imperative logic.
 
-Rego is declarative.
+In practice the rules in this repo read as:
 
-That means you describe:
-
-- what must be true for access to be allowed
-
-instead of writing an imperative step-by-step program.
-
-In practice, this often looks like:
-
-- allow if role is `ops-admin`
-- allow if role is `customer` and account is in claimed `account_ids`
+- allow if the route is a read route and role is `ops-admin`
+- allow if the route is a read route, role is `customer`, and the requested account is in the token's `account_ids`
 - deny everything else
 
 ## Deny By Default
 
-One of the most important security ideas in policy design is:
-
-- deny by default
-
-In this repo, the policy starts with:
+The most important line in the policy is:
 
 ```rego
 default allow := false
 ```
 
-That means:
-
-- unless a rule explicitly allows the request, the answer is deny
-
-This is safer than trying to list every deny rule manually.
+Unless one of the `allow` rules matches, the answer is `deny`. This is safer than enumerating deny rules — a missing deny rule can never accidentally open access.
 
 ## The Actual Policy In This Repo
 
-File:
-
-- `infra/opa/policies/banking_authz.rego`
-
-Current policy:
+File: `infra/opa/policies/banking_authz.rego`
 
 ```rego
 package banking_authz
@@ -171,26 +127,23 @@ read_only_account_request {
 }
 ```
 
-## How To Read The Policy
+## Policy Walkthrough
 
 ### `package banking_authz`
 
-This places the rules in the `banking_authz` package.
+Places the rules in the `banking_authz` package. `Kong` queries `OPA` at:
 
-That matters because Kong calls OPA at:
+```
+http://opa:8181/v1/data/banking_authz/allow
+```
 
-- `/v1/data/banking_authz/allow`
-
-So:
-
-- `banking_authz` is the package
-- `allow` is the decision being queried
+So `banking_authz` is the package and `allow` is the decision being queried.
 
 ### `default allow := false`
 
-Everything is denied unless one of the `allow` rules matches.
+Everything is denied unless one of the `allow` rules below matches.
 
-### First `allow` Rule
+### First `allow` Rule — ops-admin
 
 ```rego
 allow {
@@ -201,11 +154,11 @@ allow {
 
 Meaning:
 
-- if the route is one of the allowed read routes
-- and the role is `ops-admin`
-- then allow the request
+- the request must be a valid read route (via helper)
+- the caller must have role `ops-admin`
+- no account ownership check — `ops-admin` may read any account
 
-### Second `allow` Rule
+### Second `allow` Rule — customer
 
 ```rego
 allow {
@@ -219,12 +172,12 @@ allow {
 
 Meaning:
 
-- the route must be an allowed read route
+- the request must be a valid read route
 - the caller must have role `customer`
-- the token must contain a non-empty `customer_id`
-- the requested `account_id` must appear in the token’s `account_ids`
+- the token must carry a non-empty `customer_id`
+- the requested `account_id` must appear in the token's `account_ids` list
 
-This is the main customer-authorization rule.
+This is the core customer ownership check.
 
 ### Helper Rule: `read_only_account_request`
 
@@ -237,20 +190,33 @@ read_only_account_request {
 
 Meaning:
 
-- only `GET` requests are considered valid in this policy
-- only two route shapes are allowed:
+- only `GET` requests pass this gate
+- only two path shapes are permitted:
   - `/api/accounts/{accountId}`
   - `/api/accounts/{accountId}/transactions`
 
-This is important because it prevents future non-read routes from being accidentally allowed by the same rule.
+This prevents future non-read routes from being accidentally allowed by the same `allow` rules.
 
 ## What Input OPA Receives
 
-OPA does not read HTTP requests directly in this project.
+`OPA` does not read HTTP requests directly. `Kong` constructs a structured input document and POSTs it as JSON.
 
-Kong constructs an input object and sends it as JSON.
+The fields `OPA` actually consumes in the policy are:
 
-Typical input looks like this:
+| Field | Type | Used by |
+|---|---|---|
+| `method` | string | `read_only_account_request` |
+| `path` | string | `read_only_account_request` |
+| `role` | string | both `allow` rules |
+| `customer_id` | string | customer `allow` rule |
+| `account_ids` | array of strings | customer `allow` rule |
+| `account_id` | string | customer `allow` rule |
+
+`username` is included in the input but not consumed by policy rules in this version.
+
+See [14 — Request & Response Details](14-request-response-reference.md) for the full claim catalog.
+
+Example input document for `alice`:
 
 ```json
 {
@@ -266,20 +232,9 @@ Typical input looks like this:
 }
 ```
 
-OPA evaluates only what it sees in this input.
-
-That means the quality of the OPA decision depends on:
-
-- trustworthy input
-- correct policy rules
-
 ## How Kong Sends Input To OPA
 
-Kong calls:
-
-- `http://opa:8181/v1/data/banking_authz/allow`
-
-This value comes from `infra/kong/kong.yml`:
+`Kong` calls the `OPA` REST API via the `opa-authz` plugin. The URL comes from `infra/kong/kong.yml`:
 
 ```yaml
 plugins:
@@ -288,9 +243,7 @@ plugins:
       opa_url: http://opa:8181/v1/data/banking_authz/allow
 ```
 
-And the runtime call is built in the Kong plugin handler.
-
-The plugin constructs a JSON body like:
+The plugin handler (`infra/kong/plugins/opa-authz/handler.lua`) constructs the input body:
 
 ```lua
 local request_body = cjson.encode({
@@ -306,147 +259,26 @@ local request_body = cjson.encode({
 })
 ```
 
-So OPA receives a clean authorization input, not the raw full HTTP request.
+`OPA` receives a clean authorization input extracted from the validated JWT, not the raw HTTP request.
 
 ## What OPA Returns
 
-If the policy allows the request, OPA returns:
+If the policy allows:
 
 ```json
-{
-  "result": true
-}
+{ "result": true }
 ```
 
-If the policy denies the request, OPA returns:
+If the policy denies:
 
 ```json
-{
-  "result": false
-}
+{ "result": false }
 ```
 
-Kong then turns that result into behavior:
+`Kong` maps that to behavior:
 
-- `true` -> forward request upstream
-- `false` -> return `403 forbidden`
-
-## How OPA Is Run In Docker Compose
-
-Relevant `docker-compose.yml` section:
-
-```yaml
-opa:
-  image: openpolicyagent/opa:0.68.0
-  command: ["run", "--server", "--addr=0.0.0.0:8181", "/policies"]
-  ports:
-    - "8181:8181"
-  volumes:
-    - ./infra/opa/policies:/policies:ro
-```
-
-What this means:
-
-- use the official OPA image
-- run OPA as an HTTP server
-- listen on port `8181`
-- load policies from `/policies`
-- mount the repo directory `infra/opa/policies` into the container read-only
-
-So OPA is not compiled into the Java services.
-It runs as its own separate component.
-
-## Why The OPA Container Is Separate
-
-This separation is useful because:
-
-- policy can be changed without rewriting banking service code
-- policy can be tested independently
-- Kong can call it directly as the PDP
-- the architecture stays aligned with externalized authorization
-
-## How To Read The OPA Tests
-
-File:
-
-- `infra/opa/policies/banking_authz_test.rego`
-
-These tests show the intended behavior of the policy.
-
-Current test categories:
-
-### Admin Allow
-
-```rego
-test_ops_admin_is_allowed {
-    banking_authz.allow with input as {
-        "method": "GET",
-        "path": "/api/accounts/A-1001",
-        "role": "ops-admin",
-        "account_id": "A-1001",
-        "customer_id": "C-9999",
-    }
-}
-```
-
-Meaning:
-
-- `ops-admin` may read account endpoints
-
-### Customer Own Account Allow
-
-```rego
-test_customer_can_access_owned_account {
-    banking_authz.allow with input as {
-        "method": "GET",
-        "path": "/api/accounts/A-1001",
-        "role": "customer",
-        "account_id": "A-1001",
-        "customer_id": "C-1001",
-        "account_ids": ["A-1001"],
-    }
-}
-```
-
-Meaning:
-
-- a customer may read their own claimed account
-
-### Customer Transactions Allow
-
-```rego
-test_customer_can_access_owned_account_transactions {
-    banking_authz.allow with input as {
-        "method": "GET",
-        "path": "/api/accounts/A-1001/transactions",
-        "role": "customer",
-        "account_id": "A-1001",
-        "customer_id": "C-1001",
-        "account_ids": ["A-1001"],
-    }
-}
-```
-
-Meaning:
-
-- the same customer can also read the transactions subresource
-
-### Deny Cases
-
-The tests also prove denial for:
-
-- wrong customer/account mapping
-- missing `customer_id`
-- empty `account_ids`
-- `POST` requests
-- unsupported subresource paths like `/cards`
-- unrelated roles like `auditor`
-
-These negative tests are just as important as the allow tests.
-
-Why:
-
-- an authorization policy is only trustworthy if you also prove what it denies
+- `result: true` → forward request upstream to `banking-api-service`
+- `result: false` → return `403 Forbidden` to the client
 
 ## OPA Request Flow In This PoC
 
@@ -465,7 +297,7 @@ sequenceDiagram
     O->>O: Evaluate Rego rules
     O-->>G: result true or false
     alt result false
-        G-->>C: 403 forbidden
+        G-->>C: 403 Forbidden
     else result true
         G->>B: forward request
         B-->>G: banking response
@@ -473,11 +305,104 @@ sequenceDiagram
     end
 ```
 
-## Practical Examples In This PoC
+## How OPA Is Run In Docker Compose
 
-### Example 1: `alice` Reading Her Own Account
+```yaml
+opa:
+  image: openpolicyagent/opa:0.68.0
+  command: ["run", "--server", "--addr=0.0.0.0:8181", "/policies"]
+  ports:
+    - "8181:8181"
+  volumes:
+    - ./infra/opa/policies:/policies:ro
+```
 
-Input to OPA:
+- `OPA` runs as a standalone HTTP server on port `8181`
+- Policies are mounted read-only from `infra/opa/policies`
+- `OPA` is not compiled into any Java service — it is a separate container
+
+This separation means policy can be updated, tested, and reloaded independently of `Kong` or `banking-api-service`.
+
+## The Tests
+
+File: `infra/opa/policies/banking_authz_test.rego`
+
+```rego
+package banking_authz_test
+
+import data.banking_authz
+```
+
+### Allow: ops-admin reads an account
+
+```rego
+test_ops_admin_is_allowed {
+    banking_authz.allow with input as {
+        "method": "GET",
+        "path": "/api/accounts/A-1001",
+        "role": "ops-admin",
+        "account_id": "A-1001",
+        "customer_id": "C-9999",
+    }
+}
+```
+
+`ops-admin` may read any account endpoint regardless of customer ownership.
+
+### Allow: customer reads their own account
+
+```rego
+test_customer_can_access_owned_account {
+    banking_authz.allow with input as {
+        "method": "GET",
+        "path": "/api/accounts/A-1001",
+        "role": "customer",
+        "account_id": "A-1001",
+        "customer_id": "C-1001",
+        "account_ids": ["A-1001"],
+    }
+}
+```
+
+`alice` (customer `C-1001`) may read account `A-1001` when it appears in her `account_ids`.
+
+### Allow: customer reads their own transactions
+
+```rego
+test_customer_can_access_owned_account_transactions {
+    banking_authz.allow with input as {
+        "method": "GET",
+        "path": "/api/accounts/A-1001/transactions",
+        "role": "customer",
+        "account_id": "A-1001",
+        "customer_id": "C-1001",
+        "account_ids": ["A-1001"],
+    }
+}
+```
+
+The transactions sub-resource is also permitted for an owned account.
+
+### Deny cases
+
+The test file proves denial for all of the following:
+
+| Test | What it proves |
+|---|---|
+| `test_customer_cannot_access_other_account` | `account_ids` does not contain the requested account |
+| `test_customer_without_claimed_account_is_denied` | `account_ids` is empty |
+| `test_customer_without_customer_id_is_denied` | `customer_id` field is absent |
+| `test_ops_admin_post_account_is_denied` | `POST` fails `read_only_account_request` |
+| `test_customer_subresource_path_is_denied` | `/cards` path not matched by regex |
+| `test_other_roles_are_denied` | role `auditor` matches neither `allow` rule |
+
+Negative tests matter as much as positive ones: a policy is only trustworthy if you also prove what it denies.
+
+## Practical Examples
+
+### alice Reading Her Own Account
+
+Input:
 
 ```json
 {
@@ -493,19 +418,18 @@ Input to OPA:
 }
 ```
 
-Result:
-
-- allowed
+Result: `allow`
 
 Reason:
 
-- read route
-- role is `customer`
-- `account_ids` contains `A-1001`
+- `GET` + matching path → `read_only_account_request` passes
+- `role == "customer"`
+- `customer_id` is non-empty
+- `A-1001` is in `account_ids`
 
-### Example 2: `alice` Reading Another Account
+### alice Attempting Another Customer's Account
 
-Input to OPA:
+Input:
 
 ```json
 {
@@ -521,17 +445,15 @@ Input to OPA:
 }
 ```
 
-Result:
-
-- denied
+Result: `deny`
 
 Reason:
 
-- the claimed `account_ids` does not contain `A-2001`
+- `A-2001` is not in `alice`'s `account_ids` (`["A-1001"]`)
 
-### Example 3: `ops-admin`
+### ops-admin Reading Any Account
 
-Input to OPA:
+Input:
 
 ```json
 {
@@ -545,15 +467,13 @@ Input to OPA:
 }
 ```
 
-Result:
-
-- allowed
+Result: `allow`
 
 Reason:
 
-- `ops-admin` rule allows read access regardless of customer/account mapping
+- `ops-admin` rule does not check account ownership
 
-### Example 4: POST Request
+### POST Request (Denied For Both Roles)
 
 Input:
 
@@ -569,15 +489,13 @@ Input:
 }
 ```
 
-Result:
-
-- denied
+Result: `deny`
 
 Reason:
 
-- `read_only_account_request` fails because the method is not `GET`
+- `read_only_account_request` fails because `method != "GET"`
 
-### Example 5: Unsupported Path
+### Unsupported Sub-Resource Path
 
 Input:
 
@@ -594,58 +512,34 @@ Input:
 }
 ```
 
-Result:
-
-- denied
+Result: `deny`
 
 Reason:
 
-- the regex only allows:
-  - `/api/accounts/{id}`
-  - `/api/accounts/{id}/transactions`
+- regex only matches `/api/accounts/{id}` and `/api/accounts/{id}/transactions`
+- `/cards` does not match
 
 ## What OPA Does Not Do
 
-OPA is powerful, but it is important to understand its limits.
+`OPA` is powerful, but it has clear limits in this PoC:
 
-OPA does not:
+- does not authenticate users (that is `Keycloak`)
+- does not issue JWTs (that is `Keycloak`)
+- does not introspect tokens itself in this request path (that is the `Kong` plugin)
+- does not validate JWT signatures itself here (the `Kong` plugin decodes the payload after introspection)
+- does not serve banking data (that is `banking-api-service`)
 
-- authenticate the user
-- issue JWTs
-- introspect tokens by itself in this project
-- validate JWT signatures by itself in this request path
-- serve the banking response
+`OPA` depends on `Kong` to provide trustworthy, well-formed input. If the input is wrong, the decision is wrong.
 
-OPA depends on other components for trustworthy input.
+## Mental Model
 
-In this PoC:
+1. `Keycloak` says who the user is.
+2. `Kong` verifies the token is active and extracts claims.
+3. `Kong` sends structured input to `OPA`.
+4. `OPA` evaluates Rego rules and returns `result: true` or `result: false`.
+5. `Kong` enforces that decision at the edge.
+6. `banking-api-service` validates the JWT again before returning banking data.
 
-- Keycloak provides identity
-- Kong validates token activity and constructs the policy input
-- Spring Boot validates JWT again and serves the business response
+---
 
-## Why OPA Is Useful In Practice
-
-OPA solves an important architectural problem:
-
-- authorization logic becomes a first-class policy layer instead of being scattered through gateway code and service code
-
-That makes the system easier to:
-
-- reason about
-- test
-- change
-- review
-
-## Simple Mental Model
-
-If you want the shortest correct mental model:
-
-1. Keycloak says who the user is
-2. Kong verifies the token is active
-3. Kong sends request context to OPA
-4. OPA decides `allow` or `deny`
-5. Kong enforces that decision
-6. Spring Boot verifies again before returning data
-
-That is how OPA works in this project from principle to practice.
+← Prev: [07 — Kong](07-kong.md) · Next: [09 — banking-api-service](09-banking-api-service.md) →
