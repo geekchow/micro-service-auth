@@ -1,88 +1,10 @@
-# 04 Component Deep Dives
+# 05 — Component Tour
 
-This file explains each major component in practical terms.
+A one-paragraph-per-component map of Part II — use this as your orientation before diving into each deep-dive doc.
 
-## Keycloak Deep Dive
+> **Part II · Component Deep Dives** — Prereqs: [02](02-this-project-architecture.md)
 
-Keycloak is where identity starts.
-
-In this project it manages:
-
-- realm: `banking-poc`
-- public client: `mobile-banking-app`
-- confidential client for Kong introspection
-- demo user roles
-- custom claims such as `customer_id` and `account_ids`
-
-Why it matters:
-
-- the rest of the system depends on Keycloak to produce trustworthy identity data
-
-## Kong Deep Dive
-
-Kong is the front door of the banking API.
-
-In this project Kong does three main things:
-
-1. receives the API request first
-2. introspects the token with Keycloak
-3. sends a policy request to OPA
-
-If OPA says `deny`, Kong stops the request.
-
-If OPA says `allow`, Kong forwards the request to the banking API.
-
-## OPA Deep Dive
-
-OPA is not an API gateway and not an identity store.
-
-OPA only evaluates policy.
-
-In this project the policy checks:
-
-- is the caller `ops-admin`
-- if the caller is `customer`, does the token claim the requested `account_id`
-- is the route one of the allowed read routes
-
-OPA does not log in the user.
-OPA does not issue the token.
-OPA only answers whether the request should be allowed.
-
-## banking-api-service Deep Dive
-
-This service returns banking data.
-
-It exposes:
-
-- account details
-- transactions
-
-It also performs security work:
-
-- JWT signature validation
-- issuer validation
-- audience validation
-- service-side account authorization checks
-
-Why that matters:
-
-- even if a request somehow reaches the service directly, it still cannot bypass security easily
-
-## identity-bootstrap-service Deep Dive
-
-This service exists for demo setup, not for real customer onboarding.
-
-It:
-
-- creates demo-managed users in Keycloak
-- sets their password
-- sets their `customer_id`
-- sets their `account_ids`
-- assigns demo-managed roles
-
-It is intentionally internal to the Compose network in the current PoC.
-
-## Claim And Decision Relationship
+## Claim and Decision Flow
 
 ```mermaid
 flowchart TD
@@ -93,11 +15,26 @@ flowchart TD
     B -->|re-validate claims and token| R[Response]
 ```
 
-## Simple Mental Model
+## Keycloak
 
-Use this model when you think about the stack:
+`Keycloak` is the [IdP](01-concepts.md) for this project — it stores users, checks credentials, and issues JWTs. When `alice` or `ops-admin` logs in, `Keycloak` authenticates them and embeds custom claims such as `customer_id` and `account_ids` into the token. Every other component downstream depends on `Keycloak` to produce trustworthy identity data. See [06-keycloak-idp.md](06-keycloak-idp.md) for the deep dive.
 
-1. Keycloak creates identity data
-2. Kong checks whether the token is alive
-3. OPA checks whether the action is allowed
-4. banking-api-service verifies again before returning data
+## Kong
+
+`Kong` is the [PEP](01-concepts.md) — it is the front door of the system and the first component that sees every API request. It introspects the incoming token with `Keycloak` to confirm it is valid and not expired, then forwards the validated claims to `OPA` for a policy decision. If `OPA` returns `deny`, `Kong` stops the request immediately; if `OPA` returns `allow`, `Kong` forwards the request to `banking-api-service`. See [07-kong.md](07-kong.md) for the deep dive.
+
+## OPA
+
+`OPA` is the [PDP](01-concepts.md) — it evaluates policy rules and returns a single `allow` or `deny` decision. It does not authenticate users, issue tokens, or store identity; it only answers whether the action described in the incoming request is permitted under the current policy. In this project the policy checks the caller's role and, for `alice`, whether the token claims match the requested `account_id`. See [08-opa.md](08-opa.md) for the deep dive.
+
+## banking-api-service
+
+`banking-api-service` is the [resource server](01-concepts.md) — it owns the protected banking data and exposes account and transaction endpoints. Even after `Kong` and `OPA` have already approved the request, `banking-api-service` re-validates the JWT signature, issuer, and audience, and re-checks account-level authorization before returning any data. This adds defense in depth: a request that somehow bypasses the gateway still cannot extract data without passing service-side checks. See [09-banking-api-service.md](09-banking-api-service.md) for the deep dive.
+
+## identity-bootstrap-service
+
+`identity-bootstrap-service` is an internal demo-setup service — it exists solely to provision demo users into `Keycloak` so the PoC is runnable without manual configuration. It creates users, sets passwords, assigns roles, and populates the `customer_id` and `account_ids` claims that the rest of the stack depends on. It is intentionally not exposed outside the Compose network. See [10-identity-bootstrap-service.md](10-identity-bootstrap-service.md) for the deep dive.
+
+---
+
+← Prev: [04 — Local Demo Guide](04-local-demo-guide.md) · Next: [06 — Keycloak / IdP](06-keycloak-idp.md) →
