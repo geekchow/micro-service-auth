@@ -2,6 +2,8 @@
 
 This page explains how JWT signatures, validation, introspection, and claims work with Keycloak in this PoC.
 
+For a deeper key-distribution explanation, see `10-jwks-deep-dive.md`.
+
 The short version is:
 
 - Keycloak issues the token

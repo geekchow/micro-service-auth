@@ -1282,6 +1282,15 @@ That means the banking API is protected twice:
 - by Spring Security's JWT validation at the edge of the service
 - by `AccountAccessGuard` inside the controller path using token claims
 
+Why bother validating again if Kong already checked the token?
+
+- Kong is a gateway control point, not the banking service's trust boundary.
+- The banking service still needs to defend itself if it is called directly, bypassing Kong, or if the gateway is misconfigured or compromised.
+- Kong's check answers "should this request enter the platform?" while Spring's check answers "should this service trust and use this token?"
+- The service also needs the validated `Jwt` object so controller and guard code can make account-specific decisions from claims like `customer_id` and `account_ids`.
+
+So the second validation is defense in depth: the gateway filters bad traffic early, and the service still enforces its own security rules before returning banking data.
+
 For the signature and trust model behind that verification, see [09-jwt-signature-validation.md](/Users/phil.g.s.zhou/hsbc/dsp3/draft/docs/09-jwt-signature-validation.md).
 
 Then the service reads claims such as:
