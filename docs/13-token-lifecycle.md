@@ -1,31 +1,24 @@
-# 11 Access Token And Refresh Token Lifecycle
+# 13 — Access & Refresh Token Lifecycle
 
-This page explains why Keycloak returns fields like:
+How `Keycloak` token responses work, why each field exists, and how clients manage access and refresh tokens through the full session lifecycle.
 
-- `access_token`
-- `expires_in`
-- `refresh_token`
-- `refresh_expires_in`
+> **Part III · Token Mechanics** — Prereqs: [11](11-jwt-signature-validation.md)
 
-It also explains how a client can renew a session automatically.
+---
 
-## Why Keycloak Returns More Than Just `access_token`
+## What Keycloak Returns After Login
 
-When a client logs in to Keycloak, Keycloak does not return only a JWT string.
+When a client logs in to `Keycloak`, it does not receive only a JWT string.
 
-It returns a full OAuth 2.0 / OpenID Connect token response.
-
-That response gives the client everything it needs to:
+It receives a full OAuth 2.0 / OpenID Connect token response that gives the client everything it needs to:
 
 - call APIs now
 - know how long the token is valid
 - renew the session later without asking the user to log in again immediately
 
-That is why the response contains more than just `access_token`.
-
 ## Example Token Response
 
-A typical response looks like this:
+A typical response for `alice` logging in via `mobile-banking-app` looks like this:
 
 ```json
 {
@@ -34,7 +27,8 @@ A typical response looks like this:
   "refresh_expires_in": 1800,
   "refresh_token": "<refresh-token>",
   "token_type": "Bearer",
-  "scope": "email profile"
+  "scope": "email profile",
+  "session_state": "<uuid>"
 }
 ```
 
@@ -46,13 +40,11 @@ This is the token used to call protected APIs right now.
 
 In this PoC:
 
-- the client sends it to Kong
-- Kong introspects it with Keycloak
-- Spring Boot validates it again before returning banking data
+- `alice` or `ops-admin` sends it to `Kong`
+- `Kong` introspects it with `Keycloak`
+- `banking-api-service` validates it again before returning banking data
 
-Think of it as:
-
-- the short-lived API ticket
+Think of it as the short-lived API ticket.
 
 ### `expires_in`
 
@@ -69,14 +61,12 @@ Purpose:
 
 ### `refresh_token`
 
-This is a different token used to get a new `access_token` without asking the user to log in again immediately.
+This is a separate token used to get a new `access_token` without asking the user to log in again immediately.
 
-Think of it as:
+Think of it as the session continuation token.
 
-- the token used to continue the session
-
-The refresh token is not normally sent to the banking API.
-It is sent back to Keycloak when the client wants a new access token.
+The refresh token is not sent to `banking-api-service`.
+It is sent back to `Keycloak` when the client wants a new access token.
 
 ### `refresh_expires_in`
 
@@ -93,11 +83,7 @@ Purpose:
 
 ### `token_type`
 
-Usually this is:
-
-- `Bearer`
-
-That means the client should send the access token like this:
+Usually `Bearer`. That means the client should send the access token like this:
 
 ```http
 Authorization: Bearer <access_token>
@@ -111,40 +97,27 @@ In this PoC you often see:
 
 - `email profile`
 
-Scopes are another way of expressing granted capabilities or identity information.
+Scopes express granted capabilities or identity information available in the token.
 
 ### `session_state`
 
-You may also see `session_state` in Keycloak responses.
+`Keycloak` also returns a `session_state` field, which is an opaque identifier for the server-side session `Keycloak` keeps on behalf of the authenticated user.
 
-This helps Keycloak track the login session on its side.
+This is not primarily a client-side concern, but it matters for understanding the full picture (see [Access Token, Refresh Token, and Session State](#access-token-refresh-token-and-session-state) below).
 
-For most client logic, the more important fields are still:
-
-- `access_token`
-- `expires_in`
-- `refresh_token`
-- `refresh_expires_in`
-
-## Why These Fields Exist
-
-These fields exist because there is a security-usability tradeoff.
+## Why These Fields Exist: The Security-Usability Tradeoff
 
 ### If Access Tokens Lived Too Long
 
-That would be convenient, but unsafe.
-
-If someone stole the token, they could use it for a long time.
+Convenient, but unsafe. A stolen token could be used for a long time.
 
 ### If Access Tokens Lived Too Short Without Refresh
 
-That would be safe, but annoying.
-
-Users would have to log in again very frequently.
+Safe, but painful. Users would have to log in again very frequently.
 
 ### The Combined Design
 
-So the common design is:
+The standard design is:
 
 - short-lived `access_token`
 - longer-lived `refresh_token`
@@ -154,67 +127,122 @@ This gives:
 - better security for API calls
 - better user experience for session continuity
 
+## Access Token vs Refresh Token vs Session State
+
+These three concepts are related but distinct.
+
+### Access token
+
+The `access_token` is:
+
+- a short-lived bearer token
+- usually self-contained as a JWT
+- used to call APIs directly
+
+It carries claims such as `sub`, `preferred_username`, `realm_access.roles`, `customer_id`, `account_ids`, and `aud`. Services like `banking-api-service` can often validate it locally using JWKS without contacting `Keycloak`.
+
+Think of it as answering: "can this token present claims to an API right now?"
+
+### Refresh token
+
+The `refresh_token` is:
+
+- used to obtain a new `access_token`
+- more directly tied to the ongoing `Keycloak` session
+- not sent to `banking-api-service` or any resource API
+
+If the underlying session is gone, expired, or invalidated, the refresh token stops working even if an old access token still exists.
+
+Think of it as answering: "can this client continue the login session and get a new access token?"
+
+### Session state
+
+`Keycloak` maintains server-side session state that is separate from but related to both tokens.
+
+`Keycloak` tracks three layers of session:
+
+1. **Authentication session** (short-lived) — temporary state during the login flow; removed after login completes or expires
+2. **User session** — represents the authenticated user in a realm; tracks start time, idle/expiry state, and logout status
+3. **Client session** (per client app) — attached to a user session for each client such as `mobile-banking-app`; tracks client-specific participation in that login session
+
+At runtime, `Keycloak` stores online session state primarily in Infinispan caches. In clustered deployments these caches are distributed across nodes. Offline sessions are persisted in the database.
+
+The critical insight:
+
+- JWT claims travel inside the token
+- Live session activity lives server-side in `Keycloak`
+
+That is why a token can still decode as a valid JWT while introspection returns `active: false`. For full introspection mechanics see [11 — JWT Signature, Validation & Introspection](11-jwt-signature-validation.md).
+
+### Summary table
+
+| Token / concept | Main purpose | Sent to `banking-api-service`? | Lifetime |
+|---|---|---|---|
+| `access_token` | Call protected APIs | Yes | Short (e.g. 5 min) |
+| `refresh_token` | Get a new access token | No, sent to `Keycloak` only | Longer (e.g. 30 min) |
+| Session state | Server-side session tracking | Not directly | Tied to user/client session TTL |
+
+### Relationship diagram
+
+```mermaid
+flowchart LR
+    U[alice or ops-admin logs in] --> K[Keycloak]
+    K --> S[Server-side session state]
+    K --> AT[access_token]
+    K --> RT[refresh_token]
+    AT --> G[Kong introspection]
+    S --> G
+    AT --> B[banking-api-service JWT validation]
+    RT --> |refresh grant| K
+```
+
 ## What Problem Refresh Tokens Solve
 
-Refresh tokens solve a very practical problem:
+Refresh tokens solve a practical problem:
 
-- how can a client keep a user signed in without keeping a long-lived access token?
+- how can a client keep a user signed in without holding a long-lived access token?
 
-Without refresh tokens, the client would need to:
-
-- ask the user to log in again every time the access token expires
-
-That would be painful, especially for:
+Without refresh tokens, the client would need to ask `alice` to log in again every time the access token expired. That would be painful for:
 
 - mobile apps
 - SPAs
 - dashboards
 - long-lived user sessions
 
-Refresh tokens allow the client to:
-
-- quietly ask Keycloak for a new access token
-- continue the session until the refresh token itself expires
-
-## Access Token vs Refresh Token
-
-| Token | Main purpose | Sent to banking API? | Lifetime |
-|---|---|---|---|
-| `access_token` | Call protected APIs | Yes | Short |
-| `refresh_token` | Get a new access token | No, sent to Keycloak only | Longer |
+Refresh tokens allow the client to quietly ask `Keycloak` for a new access token and continue the session until the refresh token itself expires.
 
 ## Session Renewal Flow
 
 ```mermaid
 sequenceDiagram
-    participant C as Client
+    participant C as Client (alice session)
     participant K as Keycloak
-    participant A as Banking API path
+    participant B as banking-api-service
 
-    C->>K: Login request
-    K-->>C: access_token + refresh_token
-    C->>A: API call with access_token
+    C->>K: Login (username + password)
+    K-->>C: access_token + refresh_token + session_state
+    C->>B: API call with access_token
     Note over C: Time passes, access_token nears expiry
     C->>K: Refresh request with refresh_token
     K-->>C: new access_token + new refresh_token
-    C->>A: API call with new access_token
+    C->>B: API call with new access_token
 ```
 
 ## How Automatic Renewal Works At The Client Side
 
-The basic client logic is usually:
+The basic client logic is:
 
-1. log in once
-2. store:
+1. Log in once
+2. Store:
    - `access_token`
    - `refresh_token`
    - access-token expiry time
    - refresh-token expiry time
-3. before the access token expires, call Keycloak with the refresh token
-4. replace the stored tokens with the new response
-5. if refresh fails, send the user back to login
+3. Before the access token expires, call `Keycloak` with the refresh token
+4. Replace stored tokens with the new response
+5. If refresh fails, redirect the user back to login
 
-## Generic Client-Side Pseudocode
+## Client-Side Pseudocode
 
 ```text
 login() {
@@ -258,9 +286,7 @@ Notice the line:
 
 - `now() < accessTokenExpiresAt - 30 seconds`
 
-Clients often renew a little early instead of waiting for exact expiry.
-
-That avoids problems such as:
+Clients often renew a little early instead of waiting for exact expiry. That avoids problems such as:
 
 - network latency
 - clock skew
@@ -268,9 +294,7 @@ That avoids problems such as:
 
 ## Refresh Request Example
 
-When a client refreshes the session, it typically calls the Keycloak token endpoint again, but with a different grant type.
-
-Example shape:
+When a client refreshes, it calls the `Keycloak` token endpoint with a different grant type:
 
 ```http
 POST /realms/banking-poc/protocol/openid-connect/token
@@ -281,77 +305,84 @@ client_id=mobile-banking-app
 refresh_token=<refresh_token>
 ```
 
-Keycloak responds with a fresh token response, usually including:
+`Keycloak` responds with a fresh token response including:
 
 - new `access_token`
 - new `refresh_token`
 - new `expires_in`
 - new `refresh_expires_in`
 
-## What Happens When Renewal Fails
-
-There are two common failure cases:
+## Failure Cases
 
 ### Case 1: Access token expired, refresh token still valid
 
-- client refreshes successfully
-- user stays logged in
+- client calls the refresh endpoint
+- `Keycloak` issues new tokens
+- `alice` stays logged in transparently
 
 ### Case 2: Refresh token expired or invalid
 
-- Keycloak rejects the refresh request
-- client can no longer renew the session
-- user must log in again
+- `Keycloak` rejects the refresh request
+- the client can no longer renew the session
+- `alice` must log in again
 
-So the refresh token is what determines whether silent session continuation is still possible.
+### Case 3: Session invalidated server-side
+
+Because `Keycloak` maintains server-side session state, the refresh token can be rejected even before its `refresh_expires_in` timestamp is reached, for example if:
+
+- `alice` logged out from another device
+- the user was disabled in `Keycloak`
+- the client was disabled
+- a realm or client invalidation event occurred
+
+In this case `Keycloak` will return an error on the refresh attempt, and the client must treat it the same as an expired refresh token.
 
 ## How This Relates To This PoC
 
 In this repo:
 
-- `scripts/demo.sh` logs in and extracts only `access_token`
+- `scripts/demo.sh` logs in as `alice` or `ops-admin` and extracts only `access_token`
 - it ignores the `refresh_token`
 
 Why?
 
 - the script is short-lived
-- it only needs to demonstrate a small set of calls
-- it does not try to behave like a real mobile or web client session manager
+- it only needs to demonstrate a small number of API calls
+- it does not behave like a real mobile or web client session manager
 
-But a real mobile banking app would likely:
+A real mobile banking app would:
 
-- store the refresh token safely
-- monitor token expiry
+- store the refresh token safely (e.g. in secure platform storage)
+- monitor token expiry proactively
 - refresh tokens automatically in the background
 
 ## Security Considerations
 
-Refresh tokens are sensitive.
-
-In many ways they are more sensitive than short-lived access tokens because they can be exchanged for new access tokens.
-
-So a client should treat them carefully.
+Refresh tokens are sensitive. In many ways they are more sensitive than short-lived access tokens because they can be exchanged for new access tokens repeatedly.
 
 Important rules:
 
 - do not expose refresh tokens unnecessarily
-- do not send refresh tokens to resource APIs like the banking API
-- send refresh tokens only to Keycloak token endpoint
+- do not send refresh tokens to `banking-api-service` or any resource API
+- send refresh tokens only to the `Keycloak` token endpoint
 - store them carefully based on client type
 
 For example:
 
 - mobile apps often store them in secure platform storage
-- browser apps need more careful design because browser storage has different risks
+- browser apps need more careful design because browser storage has different risk profiles
 
-## Simple Mental Model
-
-If you want the shortest correct mental model:
+## Mental Model
 
 1. `access_token` is for calling APIs now
 2. `expires_in` tells you how long that token lasts
-3. `refresh_token` is for getting a new access token later
+3. `refresh_token` is for getting a new access token without re-login
 4. `refresh_expires_in` tells you how long session renewal remains possible
-5. when refresh expires, the user must log in again
+5. `session_state` is the server-side anchor — `Keycloak` can invalidate a session independently of the token timestamps
+6. When refresh expires or the session is invalidated, the user must log in again
 
-That is why Keycloak returns these fields and what problem they solve.
+That is why `Keycloak` returns these fields and what problem they solve.
+
+---
+
+← Prev: [12 — JWKS Deep Dive](12-jwks.md) · Next: [14 — Request & Response Details](14-request-response-reference.md) →
