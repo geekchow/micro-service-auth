@@ -1,53 +1,46 @@
 # Docs Index
 
-This directory contains the explanation and walkthrough documents for the mobile banking auth PoC.
+Explanation and walkthrough for the mobile-banking authn/authz PoC.
 
-## Recommended Reading Order
+## The story in one paragraph
 
-1. `01-concepts.md`
-   - basic ideas: authentication, authorization, IdP, PEP, PDP, JWT
+A client logs in via `Keycloak` (IdP) and gets a JWT. It calls the banking API through
+`Kong` (gateway / PEP). Kong introspects the token with Keycloak, then asks `OPA` (PDP)
+whether this caller may take this action. If allowed, Kong forwards the request to
+`banking-api-service` (resource server), which independently re-validates the JWT before
+returning data. `alice` can read only her own accounts; `ops-admin` can read any account.
 
-2. `02-this-project-architecture.md`
-   - how those ideas map to this project
+## Reading map
 
-3. `03-request-flows.md`
-   - the main end-to-end workflows
+### Part I — Foundations
+- `01-concepts.md` — authn/authz, IdP, PEP, PDP, JWT (start here)
+- `02-this-project-architecture.md` — how the concepts map to components
+- `03-request-flows.md` — the end-to-end stories
+- `04-local-demo-guide.md` — run it and watch it work
 
-4. `04-component-deep-dives.md`
-   - practical explanation of each major component
+### Part II — Component Deep Dives
+- `05-component-tour.md` — one-paragraph map of all five components
+- `06-keycloak-idp.md` — the IdP that issues tokens
+- `07-kong.md` — the gateway / PEP and its OPA plugin
+- `08-opa.md` — the PDP and its Rego policy
+- `09-banking-api-service.md` — the resource server that re-validates
+- `10-identity-bootstrap-service.md` — demo user setup
 
-5. `05-local-demo-guide.md`
-   - how to run and inspect the PoC locally
+### Part III — Token Mechanics
+- `11-jwt-signature-validation.md` — signature, validation, introspection
+- `12-jwks.md` — JWK/JWKS and key selection by `kid`
+- `13-token-lifecycle.md` — access/refresh tokens and renewal
 
-6. `06-idp-keycloak-deep-dive.md`
-   - detailed explanation of IdP concepts and Keycloak in this repo
+### Part IV — Reference
+- `14-request-response-reference.md` — wire-level headers, bodies, claims
 
-7. `07-kong-integration.md`
-   - how Kong is configured and how it interoperates with the other components
+## Where to start
+- New to the topic → `01-concepts.md`
+- Want the system fast → `02` + `03` + `04`
+- Need wire-level payloads → `14-request-response-reference.md`
 
-8. `08-request-response-details.md`
-   - low-level headers, bodies, claims, and responses between components
-
-9. `09-opa-integration.md`
-   - how OPA works from policy-engine principles to the actual Rego, tests, and runtime integration in this project
-
-10. `09-jwt-signature-validation.md`
-   - how JWT signatures, validation, introspection, and trust boundaries work with Keycloak
-
-11. `10-jwks-deep-dive.md`
-   - what JWK/JWKS are, how key selection by `kid` works, and how Spring uses `jwk-set-uri` in this PoC
-
-12. `11-access-token-refresh-token-lifecycle.md`
-   - why Keycloak returns `expires_in`, `refresh_token`, and `refresh_expires_in`
-   - how client-side automatic session renewal works
-
-## Design And Planning Docs
-
+## Design and planning docs
+- `superpowers/specs/2026-06-18-docs-reorganization-design.md`
+- `superpowers/plans/2026-06-18-docs-reorganization.md`
 - `superpowers/specs/2026-06-05-mobile-banking-auth-design.md`
 - `superpowers/plans/2026-06-05-mobile-banking-auth-poc.md`
-
-## Quick Pointers
-
-- If you are new to the topic, start with `01-concepts.md`.
-- If you want to understand the whole system quickly, read `02-this-project-architecture.md` and `03-request-flows.md` next.
-- If you want wire-level payload details, jump to `08-request-response-details.md`.
