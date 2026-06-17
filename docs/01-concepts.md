@@ -1,6 +1,16 @@
-# 01 Concepts
+# 01 — Concepts
 
-This file explains the basic security concepts used in this PoC.
+This doc explains the core security concepts you need before reading the rest of this series.
+
+> **Part I · Foundations** — Start here.
+
+## Glossary
+
+- **IdP (Identity Provider)** — issues identity + tokens. Here: `Keycloak`.
+- **PEP (Policy Enforcement Point)** — intercepts requests, enforces decisions. Here: `Kong`.
+- **PDP (Policy Decision Point)** — decides allow/deny from policy. Here: `OPA`.
+- **Resource server** — owns the protected data, re-checks the token. Here: `banking-api-service`.
+- **JWT** — signed token carrying identity + claims.
 
 ## Authentication vs Authorization
 
@@ -14,25 +24,21 @@ Authorization answers:
 
 In this project:
 
-- Keycloak handles authentication
-- Kong and OPA help enforce authorization
-- Spring Boot services also verify the caller before returning banking data
+- `Keycloak` handles authentication.
+- `Kong` and `OPA` enforce authorization.
+- `banking-api-service` also verifies the caller before returning banking data.
 
 ## IdP
 
-`IdP` means `Identity Provider`.
-
-An IdP is the system that:
+An IdP (Identity Provider) is the system that:
 
 - stores users
 - checks usernames and passwords
 - issues tokens after successful login
 
-In this project, `Keycloak` is the IdP.
+In this project, `Keycloak` is the IdP. When `alice` logs in, Keycloak authenticates her and issues a JWT.
 
 ## JWT
-
-`JWT` means `JSON Web Token`.
 
 A JWT is a signed token that carries identity information and claims, for example:
 
@@ -42,12 +48,9 @@ A JWT is a signed token that carries identity information and claims, for exampl
 - issuer
 - custom claims like `customer_id` and `account_ids`
 
-Important idea:
+Important: a JWT is not trusted just because it exists — the receiver must validate it.
 
-- a JWT is not trusted just because it exists
-- the receiver must validate it
-
-Validation usually checks:
+Validation checks:
 
 - signature
 - issuer
@@ -56,38 +59,30 @@ Validation usually checks:
 
 ## PEP
 
-`PEP` means `Policy Enforcement Point`.
+The PEP (Policy Enforcement Point) stands in front of a protected resource and either:
 
-The PEP is the component that stands in front of a protected resource and says:
+- allows the request through, or
+- blocks the request.
 
-- allow this request through
-- block this request
-
-In this project, `Kong` is the main PEP at the edge.
+In this project, `Kong` is the PEP at the edge. Every request from `alice` or `ops-admin` passes through Kong before reaching `banking-api-service`.
 
 ## PDP
 
-`PDP` means `Policy Decision Point`.
+The PDP (Policy Decision Point) evaluates policy rules and returns a decision:
 
-The PDP is the component that evaluates policy rules and returns a decision such as:
+- allow, or
+- deny.
 
-- allow
-- deny
-
-In this project, `OPA` is the PDP.
-
-> OPA stands for Open Policy Agent. It is a policy engine that decides whether a request should be allowed or denied based on rules you define. In this project, OPA acts as the PDP, which means Policy Decision Point. Kong sends request details to OPA, and OPA evaluates the policy and returns a decision such as allow or deny. That keeps authorization logic separate from authentication in Keycloak and from business logic in the Spring Boot services. A simple way to think about it is: Keycloak proves who the user is, Kong intercepts the request, and OPA answers whether that user is allowed to perform that action.
-
-
+In this project, `OPA` is the PDP. Kong sends request details to OPA, and OPA evaluates the policy and returns a decision. That keeps authorization logic separate from authentication in `Keycloak` and from business logic in `banking-api-service`. A simple way to think about it: `Keycloak` proves who the user is, `Kong` intercepts the request, and `OPA` answers whether that user is allowed to perform that action.
 
 ## Why Separate IdP, PEP, and PDP
 
 These roles are separated because they solve different problems:
 
-- Keycloak proves identity
-- Kong enforces access at the gateway
-- OPA decides whether a request should be allowed
-- Spring Boot services run business logic and add defense in depth
+- `Keycloak` proves identity.
+- `Kong` enforces access at the gateway.
+- `OPA` decides whether a request should be allowed.
+- `banking-api-service` runs business logic and adds defense in depth.
 
 This separation makes the system easier to reason about and easier to change.
 
@@ -98,11 +93,11 @@ This project uses two Spring Boot services:
 - `banking-api-service`
 - `identity-bootstrap-service`
 
-Why microservices here:
+Why microservices:
 
-- one service exposes protected banking APIs
-- one service handles demo user setup into Keycloak
-- each service has one clear responsibility
+- `banking-api-service` exposes protected banking APIs.
+- `identity-bootstrap-service` handles demo user setup into `Keycloak`.
+- Each service has one clear responsibility.
 
 ## Concept Map
 
@@ -124,7 +119,11 @@ flowchart LR
 
 If you remember only one thing, remember this:
 
-1. Keycloak says who the user is
-2. Kong blocks or forwards the request
-3. OPA decides whether the action is allowed
-4. Spring Boot validates again and serves the banking response
+1. `Keycloak` says who the user is.
+2. `Kong` blocks or forwards the request.
+3. `OPA` decides whether the action is allowed.
+4. `banking-api-service` validates again and serves the banking response.
+
+---
+
+Next: [02 — This Project Architecture](02-this-project-architecture.md) →
