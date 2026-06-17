@@ -1,130 +1,67 @@
-# 10 banking-api-service Authentication And Authorization
+# 09 — banking-api-service (Resource Server)
 
-This file explains how the `banking-api-service` Spring Boot application works, with emphasis on authentication and authorization.
+The Spring Boot service that owns the protected banking data and re-checks security on every request as a defense-in-depth layer.
 
-The main idea is:
+> **Part II · Component Deep Dives** — Prereqs: [01](01-concepts.md), [05](05-component-tour.md)
 
-- Kong and OPA protect the edge
-- `banking-api-service` still performs its own security checks
+---
 
-That gives the PoC defense in depth.
+## What the service does
 
-## What `banking-api-service` Does
-
-`banking-api-service` is the business API in this project.
-
-It exposes:
+`banking-api-service` exposes two endpoints:
 
 - `GET /api/accounts/{accountId}`
 - `GET /api/accounts/{accountId}/transactions`
 
-It returns simple in-memory banking data, but its security behavior is more important than its data storage in this PoC.
+It returns simple in-memory banking data. Its security behavior is the focus of this document, not its data storage.
 
-Its security responsibilities are:
+Security responsibilities:
 
 - authenticate the bearer token
-- validate JWT signature
-- validate JWT issuer
-- validate JWT audience
-- authorize access to the requested account
+- validate JWT signature, issuer, and audience
+- authorize access to the requested account based on JWT claims
 
-## Why The Service Still Does Security Checks
+---
 
-A common question is:
+## Why the service still does security checks
 
-- if Kong and OPA already protect the request, why does the Spring Boot service still need authentication and authorization logic?
+`Kong` is the PEP at the edge and `OPA` is the PDP that decides allow/deny. But `banking-api-service` is still a separate trust boundary. See [01 — Concepts](01-concepts.md) for the PEP/PDP/resource-server definitions.
 
-Answer:
+Reasons the service re-checks:
 
-- Kong is the edge PEP
-- OPA is the PDP
-- but the service is still a trust boundary
-
-That means the service should not assume that every request reaching it is automatically safe.
-
-Reasons:
-
-- a service could be called directly inside the network
-- a gateway misconfiguration could happen
+- a service could be called directly inside the network, bypassing `Kong`
+- a gateway misconfiguration could let a request through without a valid token
 - future routes might bypass part of the edge logic
-- defense in depth is a good security practice
+- defense in depth is good security practice — each layer should protect itself
 
-So the service repeats critical checks.
+So the service repeats the critical checks: signature, issuer, audience, and account-level authorization.
 
-## Big Picture Flow Inside The Service
+---
+
+## Request flow overview
 
 ```mermaid
 flowchart LR
-    R[Incoming HTTP request] --> S[Spring Security filter chain]
-    S --> D[JwtDecoder]
-    D --> V[Signature issuer audience validation]
-    V --> J[Authenticated Jwt principal]
-    J --> G[AccountAccessGuard]
-    G --> C[Controller]
-    C --> REPO[Repository]
+    R[Incoming HTTP request] --> SF[Spring Security filter chain]
+    SF --> JD[JwtDecoder]
+    JD --> V[Signature · issuer · audience validation]
+    V --> JP[Authenticated Jwt principal]
+    JP --> AG[AccountAccessGuard]
+    AG --> AC[AccountController or TransactionController]
+    AC --> REPO[AccountRepository / TransactionRepository]
     REPO --> RESP[JSON response]
 ```
 
-## Authentication In This Service
+---
 
-Authentication here means:
+## `SecurityConfig` wiring
 
-- turning an incoming bearer token into a trusted authenticated principal
+`SecurityConfig` is annotated `@Configuration`. Spring Boot discovers it at startup and creates two beans from it:
 
-This is mainly configured in:
-
-- `services/banking-api-service/src/main/java/com/banking/poc/bankingapi/security/SecurityConfig.java`
-
-## `SecurityConfig` Overview
-
-Key pieces in `SecurityConfig`:
-
-1. `SecurityFilterChain`
-2. `JwtDecoder`
-3. custom JWT validator
-
-## How Spring Security Wires `SecurityConfig` Into The Service
-
-This is the missing link between:
-
-- the `SecurityConfig` class you see in the code
-- the runtime behavior that happens before the controller executes
-
-Important idea:
-
-- the controller does not call `SecurityConfig` directly
-- Spring Boot and Spring Security wire it in automatically at startup
-
-### Step 1: Spring Boot Discovers `SecurityConfig`
-
-`SecurityConfig` is annotated with:
-
-```java
-@Configuration
-```
-
-That tells Spring Boot:
-
-- this class defines bean configuration
-
-During application startup, Spring scans the application package and finds this class.
-
-### Step 2: Spring Creates The Beans Declared In `SecurityConfig`
-
-The class defines two important beans:
-
-- `JwtDecoder`
 - `SecurityFilterChain`
+- `JwtDecoder`
 
-Because they are annotated with `@Bean`, Spring creates them and places them in the application context.
-
-That means these objects become framework-managed components, not objects you manually new-up in controller code.
-
-### Step 3: Spring Security Picks Up `SecurityFilterChain`
-
-Spring Security looks for a `SecurityFilterChain` bean.
-
-When it finds this one:
+### `SecurityFilterChain`
 
 ```java
 @Bean
@@ -139,413 +76,230 @@ SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
 }
 ```
 
-it uses that bean to build the runtime security filter chain for incoming HTTP requests.
+What each line means:
 
-This is what wires authentication into every request before it reaches the controller.
+- CSRF is disabled — this is a stateless API, not a browser form app
+- `/actuator/health` is public — needed for container health checks
+- everything else requires authentication
+- `.oauth2ResourceServer(...jwt(...))` installs JWT authentication filters
 
-### Step 4: `oauth2ResourceServer().jwt()` Turns On JWT Authentication
+Those filters extract the `Authorization: Bearer` token and ask `JwtDecoder` to validate it before the controller is ever called.
 
-This line is the important switch:
-
-```java
-.oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()))
-```
-
-It tells Spring Security:
-
-- this application is an OAuth2 resource server
-- bearer tokens should be treated as JWTs
-- JWT authentication filters should be installed in the security chain
-
-Those filters do the heavy lifting at runtime:
-
-- read the `Authorization` header
-- extract the bearer token
-- ask a `JwtDecoder` to validate it
-- create an authenticated principal if validation succeeds
-
-### Step 5: Spring Security Uses The `JwtDecoder` Bean From `SecurityConfig`
-
-`SecurityConfig` also defines:
+### `JwtDecoder`
 
 ```java
 @Bean
-JwtDecoder jwtDecoder(...) {
+JwtDecoder jwtDecoder(
+        @Value("${spring.security.oauth2.resourceserver.jwt.jwk-set-uri}") String jwkSetUri,
+        @Value("${banking-api.security.issuer-uri}") String issuerUri,
+        @Value("${banking-api.security.audience}") String audience) {
     NimbusJwtDecoder jwtDecoder = NimbusJwtDecoder.withJwkSetUri(jwkSetUri).build();
     jwtDecoder.setJwtValidator(jwtValidator(issuerUri, audience));
     return jwtDecoder;
 }
 ```
 
-Because a `JwtDecoder` bean exists in the application context, Spring Security uses that exact bean for JWT authentication.
+`NimbusJwtDecoder.withJwkSetUri(...)` fetches public keys from `Keycloak`'s JWKS endpoint and verifies the token signature with them. A custom `jwtValidator` then checks issuer and audience.
 
-That is the connection.
+The service uses JWKS (public-key verification) rather than token introspection — stateless, no round-trip to `Keycloak` per request. For the rationale behind that choice, see [11 — JWT signature validation](11-jwt-signature-validation.md). For JWKS mechanics, see [12 — JWKS](12-jwks.md).
 
-So the flow is:
+---
 
-1. `SecurityFilterChain` says JWT resource-server authentication is enabled
-2. Spring Security needs a `JwtDecoder`
-3. Spring finds the `JwtDecoder` bean from `SecurityConfig`
-4. that decoder validates signature, issuer, and audience
+## Configuration
 
-### Step 6: Successful Authentication Produces A `Jwt` Principal
+### `application.yml` keys
 
-If the token is valid:
+| Key | Purpose |
+|---|---|
+| `spring.security.oauth2.resourceserver.jwt.jwk-set-uri` | URL to fetch `Keycloak` public keys |
+| `banking-api.security.issuer-uri` | Trusted issuer; must match the JWT `iss` claim |
+| `banking-api.security.audience` | Required audience value; must appear in JWT `aud` claim |
 
-- Spring Security creates an authenticated object
-- the JWT becomes the authenticated principal
-- Spring stores that authentication result in the security context
+### Environment variables (from `docker-compose.yml`)
 
-If the token is invalid:
+| Variable | Docker Compose value |
+|---|---|
+| `BANKING_API_JWK_SET_URI` | `http://keycloak:8080/realms/banking-poc/protocol/openid-connect/certs` |
+| `BANKING_API_ISSUER_URI` | `http://keycloak:8080/realms/banking-poc` |
+| `BANKING_API_AUDIENCE` | `mobile-banking-app` |
 
-- Spring returns `401`
-- the controller method is never called
+---
 
-### Step 7: Spring MVC Injects `@AuthenticationPrincipal Jwt jwt`
+## JWT validation
 
-When the request finally reaches the controller, Spring MVC sees this method signature:
+The `jwtValidator` method in `SecurityConfig` composes two validators:
 
-```java
-public AccountDto getAccount(@PathVariable String accountId, @AuthenticationPrincipal Jwt jwt)
-```
+### Signature
 
-`@AuthenticationPrincipal` means:
+`NimbusJwtDecoder` verifies the token signature using keys fetched from `Keycloak`'s JWKS endpoint. A tampered token fails immediately.
 
-- take the authenticated principal from the security context
-- inject it into this method parameter
+### Issuer
 
-Because the authenticated principal is a validated `Jwt`, the controller receives a trusted `Jwt` object.
+`JwtValidators.createDefaultWithIssuer(issuerUri)` checks that the `iss` claim matches the configured `Keycloak` realm. A token from a different issuer is rejected.
 
-That is why controller code can immediately do authorization checks using claims without doing its own token parsing.
+### Audience
 
-### Startup Wiring vs Runtime Request Processing
+A `JwtClaimValidator` checks that the `aud` claim contains `mobile-banking-app`. A token not scoped to this application is rejected.
 
-This distinction is important.
+If any check fails, Spring Security returns `401 Unauthorized` and the controller is never called.
 
-#### Startup wiring
+---
+
+## What claims the service reads
+
+`AccountAccessGuard` reads three claims from the validated `Jwt`:
+
+| Claim | How it is read |
+|---|---|
+| `realm_access.roles` | `jwt.getClaim("realm_access")` cast to `Map`, then `get("roles")` |
+| `customer_id` | `jwt.getClaimAsString("customer_id")` |
+| `account_ids` | `jwt.getClaimAsStringList("account_ids")` |
+
+For the full claim catalog across the system, see [14 — Request/Response Reference](14-request-response-reference.md).
+
+---
+
+## How Spring Security wires `SecurityConfig` at runtime
 
 At startup:
 
-- Spring Boot discovers `SecurityConfig`
-- Spring creates `SecurityFilterChain`
-- Spring creates `JwtDecoder`
+1. Spring discovers `SecurityConfig` (`@Configuration`)
+2. Creates `SecurityFilterChain` bean — installs JWT filter chain
+3. Creates `JwtDecoder` bean — Spring Security uses it automatically
 
-#### Runtime request processing
+Per request:
 
-For each request:
-
-- request hits the filter chain
-- bearer token is extracted
-- `JwtDecoder` validates the token
-- authentication is stored in the security context
-- controller receives `@AuthenticationPrincipal Jwt jwt`
-
-## Runtime Flow With `SecurityConfig`
+1. JWT filter extracts the bearer token
+2. `JwtDecoder` validates signature, issuer, audience
+3. Spring stores the authenticated `Jwt` in the security context
+4. Controllers receive it via `@AuthenticationPrincipal Jwt jwt`
+5. Controller calls `AccountAccessGuard` for authorization
 
 ```mermaid
 sequenceDiagram
     participant R as Incoming request
-    participant SF as SecurityFilterChain
+    participant SF as Spring Security filter chain
     participant JD as JwtDecoder
     participant SC as SecurityContext
     participant AC as AccountController
     participant AG as AccountAccessGuard
 
-    R->>SF: HTTP request with Authorization Bearer token
-    SF->>JD: Validate JWT
-    JD-->>SF: Valid or invalid
+    R->>SF: HTTP GET + Authorization: Bearer token
+    SF->>JD: validate JWT
+    JD-->>SF: valid or invalid
     alt invalid token
         SF-->>R: 401 Unauthorized
     else valid token
-        SF->>SC: Store authenticated Jwt principal
-        SC-->>AC: Inject @AuthenticationPrincipal Jwt
-        AC->>AG: checkCanAccess...
+        SF->>SC: store authenticated Jwt principal
+        SC-->>AC: inject @AuthenticationPrincipal Jwt
+        AC->>AG: checkCanAccessAccountId(accountId, jwt)
         AG-->>AC: allow or 403
-        AC-->>R: business response
+        AC->>AG: checkCanAccess(account, jwt)
+        AG-->>AC: allow or 403
+        AC-->>R: 200 JSON or 404
     end
 ```
 
-### `SecurityFilterChain`
+---
 
-Important configuration:
+## `AccountAccessGuard`
 
-```java
-return http
-        .csrf(csrf -> csrf.disable())
-        .authorizeHttpRequests(authorize -> authorize
-                .requestMatchers("/actuator/health").permitAll()
-                .anyRequest().authenticated())
-        .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()))
-        .build();
-```
+File: `services/banking-api-service/src/main/java/com/banking/poc/bankingapi/account/AccountAccessGuard.java`
 
-Meaning:
+The guard has two public methods:
 
-- disable CSRF because this PoC is an API service, not a browser form app
-- allow `/actuator/health` without authentication
-- require authentication for everything else
-- use Spring Security OAuth2 resource-server mode with JWT
+- `checkCanAccessAccountId(String accountId, Jwt jwt)` — called before repository lookup
+- `checkCanAccess(AccountDto account, Jwt jwt)` — called after the account is loaded
 
-So before the controller runs, Spring Security ensures:
+### Why two checks
 
-- there is a bearer token
-- it can be decoded and validated
+**First check — account-id precheck (`checkCanAccessAccountId`):**
 
-If not, Spring returns `401`.
+- rejects obviously forbidden account IDs early
+- reduces information leakage — the service does not touch the repository for a request it will reject
+- avoids loading data for requests the caller clearly cannot access
 
-### `JwtDecoder`
+**Second check — object-level check (`checkCanAccess`):**
 
-Important code:
+- confirms the loaded account's `customerId` actually matches the JWT `customer_id`
+- adds a safety layer for cases where account/customer relationships diverge from what the ID alone implies
 
-```java
-NimbusJwtDecoder jwtDecoder = NimbusJwtDecoder.withJwkSetUri(jwkSetUri).build();
-jwtDecoder.setJwtValidator(jwtValidator(issuerUri, audience));
-```
+### Authorization rules
 
-Meaning:
+**Rule 1 — no JWT → `401`**
 
-- the service fetches signing keys from Keycloak JWKS
-- it validates the JWT using those keys
-- it also applies issuer and audience validation
+If the `Jwt` object is `null`, the guard throws `401 Unauthorized`.
 
-This is how the service knows the JWT is really from Keycloak and meant for this application.
+**Rule 2 — `ops-admin` may access any account**
 
-### What The Service Reads From Configuration
+If `realm_access.roles` contains `ops-admin`, both checks pass unconditionally.
 
-From `application.yml`:
+**Rule 3 — `customer` must match claim context**
 
-- `spring.security.oauth2.resourceserver.jwt.jwk-set-uri`
-- `banking-api.security.issuer-uri`
-- `banking-api.security.audience`
+For `checkCanAccessAccountId`, all of the following must be true:
 
-These values tell Spring Boot:
+- `realm_access.roles` contains `customer`
+- `customer_id` claim is non-null and non-blank
+- `account_ids` claim contains the requested `accountId`
 
-- where to get the public keys
-- which issuer is trusted
-- which audience is required
-
-## What JWT Validation Means Here
-
-The service checks at least these things:
-
-### Signature
-
-- proves the token was signed by Keycloak
-- rejects a tampered token
-
-### Issuer
-
-- must match the configured Keycloak realm issuer
-- rejects tokens from the wrong issuer
-
-### Audience
-
-- must contain `mobile-banking-app`
-- rejects tokens not meant for this application
-
-## Authentication Result Inside Spring
-
-If validation succeeds, Spring Security creates a `Jwt` principal.
-
-Controllers receive it here:
-
-```java
-public AccountDto getAccount(@PathVariable String accountId, @AuthenticationPrincipal Jwt jwt)
-```
-
-and here:
-
-```java
-public List<TransactionDto> getTransactions(@PathVariable String accountId, @AuthenticationPrincipal Jwt jwt)
-```
-
-That `Jwt` object contains trusted claims, such as:
-
-- `customer_id`
-- `account_ids`
-- `realm_access.roles`
-
-## Authorization In This Service
-
-Authentication answers:
-
-- is this caller valid?
-
-Authorization answers:
-
-- may this valid caller access this account?
-
-The main authorization class is:
-
-- `AccountAccessGuard`
-
-File:
-
-- `services/banking-api-service/src/main/java/com/banking/poc/bankingapi/account/AccountAccessGuard.java`
-
-## `AccountAccessGuard` Overview
-
-It has two key methods:
-
-1. `checkCanAccessAccountId`
-2. `checkCanAccess`
-
-These two checks are intentionally separate.
-
-## Why There Are Two Authorization Checks
-
-### First check: account-id precheck
-
-```java
-accountAccessGuard.checkCanAccessAccountId(accountId, jwt);
-```
-
-This happens before repository lookup.
-
-Why:
-
-- reject obviously forbidden account IDs early
-- reduce information leakage
-- avoid looking up data for requests the caller clearly should not access
-
-### Second check: account object check
-
-```java
-accountAccessGuard.checkCanAccess(account, jwt);
-```
-
-This happens after the account is loaded.
-
-Why:
-
-- confirm the loaded account really matches the claim context
-- add another safety layer in case account/customer relationships matter
-
-So the service does:
-
-1. quick precheck against account ID and claims
-2. actual object-level check after loading data
-
-## Authorization Rules Inside `AccountAccessGuard`
-
-### Rule 1: no JWT means `401`
-
-If the `Jwt` object is missing:
-
-- throw `401 Unauthorized`
-
-### Rule 2: `ops-admin` can access any account
-
-The guard checks `realm_access.roles`.
-
-If the roles contain:
-
-- `ops-admin`
-
-then access is allowed.
-
-### Rule 3: `customer` must match claim context
-
-A customer is allowed only if:
-
-- role includes `customer`
-- `customer_id` exists and is not blank
-- requested `accountId` is in `account_ids`
-
-For the object-level check, it also verifies:
+For `checkCanAccess`, additionally:
 
 - `account.customerId()` equals the JWT `customer_id`
-- `account.accountId()` is in JWT `account_ids`
+- `account.accountId()` is in the JWT `account_ids` list
 
-### Rule 4: otherwise `403`
+**Rule 4 — otherwise `403`**
 
-If none of the allowed conditions match:
+---
 
-- throw `403 Forbidden`
+## `AccountController`
 
-## How Roles And Claims Are Read
+File: `services/banking-api-service/src/main/java/com/banking/poc/bankingapi/account/AccountController.java`
 
-The guard reads:
-
-- `realm_access.roles`
-- `customer_id`
-- `account_ids`
-
-`realm_access.roles` is read from the JWT claim map.
-
-`account_ids` is read with:
+Endpoint: `GET /api/accounts/{accountId}`
 
 ```java
-jwt.getClaimAsStringList("account_ids")
+@GetMapping("/{accountId}")
+public AccountDto getAccount(@PathVariable String accountId, @AuthenticationPrincipal Jwt jwt) {
+    accountAccessGuard.checkCanAccessAccountId(accountId, jwt);
+    AccountDto account = accountRepository.findById(accountId)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+    accountAccessGuard.checkCanAccess(account, jwt);
+    return account;
+}
 ```
-
-`customer_id` is read with:
-
-```java
-jwt.getClaimAsString("customer_id")
-```
-
-## How `AccountController` Works
-
-File:
-
-- `services/banking-api-service/src/main/java/com/banking/poc/bankingapi/account/AccountController.java`
 
 Flow:
 
-1. receive `accountId`
-2. receive authenticated `Jwt`
-3. precheck account access with `checkCanAccessAccountId`
-4. load account from repository
-5. if account missing, return `404`
-6. object-level check with `checkCanAccess`
-7. return JSON response
+1. receive `accountId` from path, receive validated `Jwt` from security context
+2. `checkCanAccessAccountId` — reject early if the caller cannot access this account ID
+3. load account from `AccountRepository` — return `404` if not found
+4. `checkCanAccess` — confirm the loaded account matches the caller's claim context
+5. return `AccountDto` as JSON
 
-### Account Controller Flow
+---
 
-```mermaid
-sequenceDiagram
-    participant C as Client or Kong
-    participant CFG as SecurityConfig startup wiring
-    participant S as Spring Security filter chain
-    participant AC as AccountController
-    participant G as AccountAccessGuard
-    participant R as AccountRepository
+## `TransactionController`
 
-    Note over CFG,S: At startup, SecurityConfig provides SecurityFilterChain and JwtDecoder
-    C->>S: GET /api/accounts/{id} + Bearer token
-    S->>S: Extract bearer token and validate Jwt
-    S-->>AC: Inject @AuthenticationPrincipal Jwt
-    AC->>G: checkCanAccessAccountId(id, jwt)
-    G-->>AC: allow or throw 403
-    AC->>R: findById(id)
-    R-->>AC: account or empty
-    AC->>G: checkCanAccess(account, jwt)
-    G-->>AC: allow or throw 403
-    AC-->>C: 200 JSON or 404
+File: `services/banking-api-service/src/main/java/com/banking/poc/bankingapi/transaction/TransactionController.java`
+
+Endpoint: `GET /api/accounts/{accountId}/transactions`
+
+```java
+@GetMapping("/{accountId}/transactions")
+public List<TransactionDto> getTransactions(@PathVariable String accountId, @AuthenticationPrincipal Jwt jwt) {
+    accountAccessGuard.checkCanAccessAccountId(accountId, jwt);
+    AccountDto account = accountRepository.findById(accountId)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+    accountAccessGuard.checkCanAccess(account, jwt);
+    return transactionRepository.findByAccountId(accountId);
+}
 ```
 
-## How `TransactionController` Works
+The flow is the same as `AccountController`. After both guard checks pass, the controller loads the transaction list from `TransactionRepository` and returns it.
 
-File:
+---
 
-- `services/banking-api-service/src/main/java/com/banking/poc/bankingapi/transaction/TransactionController.java`
-
-Flow is almost the same:
-
-1. authenticate JWT
-2. precheck access for account ID
-3. load account
-4. confirm access against the loaded account
-5. load transactions
-6. return JSON list
-
-Important detail:
-
-- unknown account -> `404`
-- forbidden account -> `403`
-
-## Class Relationship Inside The Service
+## Class relationships
 
 ```mermaid
 flowchart TD
@@ -560,131 +314,96 @@ flowchart TD
     TC --> TR[TransactionRepository]
 ```
 
-## How This Service Interoperates With Other Components
+---
 
-### With Keycloak
+## Interoperability
 
-Keycloak provides:
+### With `Keycloak`
 
-- the JWT signature source
-- the trusted issuer
-- the audience-bearing token
-- claims such as `customer_id` and `account_ids`
+`Keycloak` signs the JWT, sets the issuer, and embeds `customer_id`, `account_ids`, and role claims. The service validates the signature against `Keycloak`'s JWKS endpoint and trusts no claims from an unsigned or mis-issued token.
 
-The banking service validates and consumes that data.
+### With `Kong`
 
-### With Kong
+`Kong` is the PEP that forwards requests reaching `banking-api-service`. However, the service does not trust `Kong` unconditionally — it validates the JWT independently. This means a direct call to the service (bypassing `Kong`) still gets the same security enforcement.
 
-Kong is the edge PEP.
+### With `OPA`
 
-Kong forwards requests that pass gateway enforcement.
+`OPA` is the PDP consulted by `Kong` at the edge. `banking-api-service` does not call `OPA` directly. Instead, it re-enforces the same business access rules (account ownership, role) from the trusted JWT claims. The edge and the service converge on the same answer because they both read the same claims.
 
-But the banking service still treats the request as needing local verification.
+### With `identity-bootstrap-service`
 
-### With OPA
+`identity-bootstrap-service` creates `Keycloak` users with roles, `customer_id`, and `account_ids`. Those values are embedded in every JWT that `banking-api-service` later receives and validates.
 
-OPA makes edge authorization decisions through Kong.
+---
 
-The banking service does not call OPA directly in this PoC.
+## Practical examples
 
-Instead, the banking service re-enforces access based on the same trusted claims.
+### Example 1 — `alice` accesses her own account
 
-### With identity-bootstrap-service
+`alice`'s JWT:
 
-The bootstrap service indirectly affects banking authorization by creating Keycloak users with:
+- `realm_access.roles`: `["customer"]`
+- `customer_id`: `C-1001`
+- `account_ids`: `["A-1001"]`
 
-- roles
-- `customer_id`
-- `account_ids`
-
-Those values later appear in the JWT that the banking service reads.
-
-## Practical Security Examples
-
-### Example 1: Valid `alice`
-
-JWT claims:
-
-- role `customer`
-- `customer_id = C-1001`
-- `account_ids = [A-1001]`
-
-Request:
-
-- `GET /api/accounts/A-1001`
+Request: `GET /api/accounts/A-1001`
 
 Result:
 
-- authentication passes
-- authorization passes
-- response `200`
+- JWT validation passes (signature, issuer, audience)
+- `checkCanAccessAccountId` passes (`A-1001` is in `account_ids`)
+- account loaded
+- `checkCanAccess` passes (`customerId` matches)
+- `200 OK` with account JSON
 
-### Example 2: `alice` Requests Another Account
+### Example 2 — `alice` requests an account she does not own
 
-JWT claims still say:
+Same JWT as above.
 
-- `account_ids = [A-1001]`
-
-Request:
-
-- `GET /api/accounts/A-2001`
+Request: `GET /api/accounts/A-2001`
 
 Result:
 
-- authentication passes
-- authorization fails at guard
-- response `403`
+- JWT validation passes
+- `checkCanAccessAccountId` fails (`A-2001` not in `account_ids = ["A-1001"]`)
+- `403 Forbidden` — controller never executes
 
-### Example 3: `ops-admin`
+### Example 3 — `ops-admin` accesses any account
 
-JWT claims include:
+`ops-admin`'s JWT:
 
-- role `ops-admin`
+- `realm_access.roles`: `["ops-admin"]`
 
-Request:
-
-- `GET /api/accounts/A-2001`
+Request: `GET /api/accounts/A-2001`
 
 Result:
 
-- authentication passes
-- role-based authorization passes
-- response `200`
+- JWT validation passes
+- `checkCanAccessAccountId` passes (role `ops-admin` short-circuits)
+- account loaded
+- `checkCanAccess` passes (role `ops-admin` short-circuits)
+- `200 OK` with account JSON
 
-### Example 4: Tampered Token
+### Example 4 — tampered token
 
-Request contains an altered JWT.
+Request carries a JWT with an invalid signature.
 
 Result:
 
-- JWT validation fails
-- Spring Security rejects the request
-- response `401`
+- `JwtDecoder` rejects the token during signature verification
+- Spring Security returns `401 Unauthorized`
+- controller never executes
 
-## What Problems This Service-Side Security Solves
+---
 
-This service-side security solves several problems:
+## Mental model
 
-### Problem 1: direct service calls
+1. `SecurityConfig` wires two beans at startup: `SecurityFilterChain` and `JwtDecoder`
+2. Per request, the filter chain extracts and validates the bearer token (signature → issuer → audience)
+3. A valid token becomes a trusted `Jwt` principal injected via `@AuthenticationPrincipal`
+4. `AccountAccessGuard` enforces account-level authorization using `realm_access.roles`, `customer_id`, and `account_ids`
+5. Controllers return data only after both the authentication and authorization checks pass
 
-If a request reaches `banking-api-service` directly, the service still protects itself.
+---
 
-### Problem 2: gateway misconfiguration risk
-
-Even if the gateway layer is changed or misconfigured later, the service still validates the JWT and claims.
-
-### Problem 3: claim misuse risk
-
-The service does not just trust that the route is safe. It verifies the business-specific claim context itself.
-
-## Simple Mental Model
-
-If you want the shortest correct mental model:
-
-1. Spring Security authenticates the bearer token
-2. `JwtDecoder` validates signature, issuer, and audience
-3. Spring injects a trusted `Jwt` principal
-4. `AccountAccessGuard` authorizes account access
-5. controllers return data only after those checks pass
-
-That is how `banking-api-service` handles authentication and authorization in this PoC.
+← Prev: [08 — OPA](08-opa.md) · Next: [10 — identity-bootstrap-service](10-identity-bootstrap-service.md) →
