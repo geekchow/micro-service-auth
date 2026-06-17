@@ -37,6 +37,10 @@ This directory contains the explanation and walkthrough documents for the mobile
 11. `10-jwks-deep-dive.md`
    - what JWK/JWKS are, how key selection by `kid` works, and how Spring uses `jwk-set-uri` in this PoC
 
+12. `11-access-token-refresh-token-lifecycle.md`
+   - why Keycloak returns `expires_in`, `refresh_token`, and `refresh_expires_in`
+   - how client-side automatic session renewal works
+
 ## Design And Planning Docs
 
 - `superpowers/specs/2026-06-05-mobile-banking-auth-design.md`
