@@ -1,22 +1,30 @@
-# 08 Request And Response Details
+# 14 — Request & Response Details (Wire-Level Reference)
 
-This file explains the actual request headers, request bodies, token claims, and response bodies flowing between components in this PoC.
+Every header, body, and claim that crosses a component boundary in this PoC, in one place.
 
-The goal is to show the wire-level view of the system.
+> **Part IV · Reference** — Use as a lookup; read Parts I–III first.
 
-## Why This Doc Exists
+## How to use this doc
 
-The higher-level docs explain:
+This is a **lookup reference**, not a read-through. Jump to the flow you need:
 
-- what each component does
-- how the workflow looks logically
+| You want to know… | Go to |
+|---|---|
+| What the demo script sends to create a user | [Flow 1](#flow-1-demo-script---identity-bootstrap-service) |
+| How the bootstrap service authenticates to Keycloak | [Flow 2](#flow-2-identity-bootstrap-service---keycloak-token-endpoint) |
+| Which Keycloak admin APIs are called | [Flow 3](#flow-3-identity-bootstrap-service---keycloak-admin-user-apis) |
+| How a user JWT is obtained | [Flow 4](#flow-4-demo-script---keycloak-login-endpoint) |
+| What JWT claims exist and why | [Flow 5 — Claim Catalog](#flow-5-jwt-claims-produced-by-keycloak) |
+| What the client sends to Kong | [Flow 6](#flow-6-client---kong) |
+| How Kong introspects the token | [Flow 7](#flow-7-kong---keycloak-introspection) |
+| What Kong sends to OPA | [Flow 8](#flow-8-kong---opa) |
+| How Kong forwards to the banking service | [Flow 9](#flow-9-kong---banking-api-service) |
+| What responses the banking service returns | [Flow 10](#flow-10-banking-api-service-responses) |
+| Quick header reference per hop | [Flow 11](#flow-11-which-component-sends-which-important-header) |
 
-This doc explains:
+This doc owns the **canonical JWT claim catalog** (Flows 5A–5K). Docs [06](06-keycloak-idp.md) and [08](08-opa.md)–[09](09-banking-api-service.md) link here rather than duplicating that material.
 
-- what data is actually sent
-- which headers are used
-- what JSON or form body each component receives
-- what response shape comes back
+---
 
 ## End-To-End Data Flow Map
 
@@ -44,11 +52,11 @@ sequenceDiagram
     G-->>D: Final HTTP response
 ```
 
+---
+
 ## Flow 1: Demo Script -> identity-bootstrap-service
 
-The demo script creates demo users by calling:
-
-- `POST http://identity-bootstrap-service:8080/demo/users`
+The demo script creates demo users by calling `POST http://identity-bootstrap-service:8080/demo/users`.
 
 ### Headers
 
@@ -57,7 +65,7 @@ X-Demo-Bootstrap-Secret: demo-bootstrap-secret
 Content-Type: application/json
 ```
 
-### Request Body Example For `alice`
+### Request Body — `alice`
 
 ```json
 {
@@ -69,7 +77,7 @@ Content-Type: application/json
 }
 ```
 
-### Request Body Example For `ops-admin`
+### Request Body — `ops-admin`
 
 ```json
 {
@@ -83,7 +91,7 @@ Content-Type: application/json
 
 ### Response
 
-On success, `identity-bootstrap-service` returns HTTP `201` with a body like:
+On success, `identity-bootstrap-service` returns HTTP `201`:
 
 ```json
 {
@@ -93,29 +101,22 @@ On success, `identity-bootstrap-service` returns HTTP `201` with a body like:
 }
 ```
 
-If the shared bootstrap header is missing, the service returns `401`.
+| Condition | Status |
+|---|---|
+| Missing bootstrap header | `401` |
+| Role not in allowed set | `400` |
+| Username exists but not demo-managed | `409` |
 
-If the role is not one of the allowed demo roles, the service returns `400`.
-
-If the username already exists in Keycloak but is not marked as demo-managed, the service returns `409`.
+---
 
 ## Flow 2: identity-bootstrap-service -> Keycloak Token Endpoint
 
-Before the bootstrap service can create or update users, it authenticates to Keycloak as an admin client.
+Before creating or updating users, the bootstrap service authenticates to [Keycloak](01-concepts.md) as an admin client.
 
 ### Request
 
-Method:
-
-- `POST`
-
-URL:
-
-- `http://keycloak:8080/realms/master/protocol/openid-connect/token`
-
-Headers:
-
 ```http
+POST http://keycloak:8080/realms/master/protocol/openid-connect/token
 Content-Type: application/x-www-form-urlencoded
 ```
 
@@ -141,14 +142,14 @@ curl -sS -X POST "http://keycloak:8080/realms/master/protocol/openid-connect/tok
 
 ### Response
 
-Keycloak returns JSON that contains at least:
+Keycloak returns JSON containing at least:
 
 ```json
 {
-  "access_token": "eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICJrcTd4OGlTZDl3TGwtOUpSRkZ0MzE0NFZ2bnF3eFJMcWFwMjNxUEQ1bjRRIn0.eyJleHAiOjE3ODE0NTA3MDEsImlhdCI6MTc4MTQ1MDY0MSwianRpIjoiMWE2ZjNmODUtMzI1Zi00ZDg4LTgyODYtNWQyYTZkYmM2Yzc3IiwiaXNzIjoiaHR0cDovL2tleWNsb2FrOjgwODAvcmVhbG1zL21hc3RlciIsInR5cCI6IkJlYXJlciIsImF6cCI6ImFkbWluLWNsaSIsInNpZCI6IjJmOTE0ZjBlLTc2OTAtNDM1YS1iZjk1LWQ4ODcyMTNmY2E4ZSIsInNjb3BlIjoicHJvZmlsZSBlbWFpbCJ9.OFduJ4Zziz_lrs0CWlkksCZlnJmr6vbU31Z0ECuR8KvBgt6ALJ5w4zH50Gm1VwH-qhmaq-ZltuZtGiUUeL1vQJfKhSk69hSEqwQyDXLOpEiBeTZZ6OnhG1qMgdapqnRrv5qNtSFQY216S8pba1geHeP6ngzk27Ar0G443tC80TaFag6r3-n-1WgeGGZJz-QegcfIefzTLbw5p9Z0QFoQp2YfohF3TCRHJVlnNk3_70cEtLE_W_dEuJWhHhgq4GLIZE-zWK5-_ARK601geeaj8grjxGGtwg371YCG6QzwNr8FK78d6C9mMzrmrc21HCCGhln-6XYIlWs0DkUMdIxidw",
+  "access_token": "<admin-jwt>",
   "expires_in": 60,
   "refresh_expires_in": 1800,
-  "refresh_token": "eyJhbGciOiJIUzUxMiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICI4ZTBlZTZkNi05ZmI2LTRlYTUtOTgxZS1lNmZiM2Y1NDBlMGYifQ.eyJleHAiOjE3ODE0NTI0NDEsImlhdCI6MTc4MTQ1MDY0MSwianRpIjoiNTEzYzdjOWYtMTZkYi00YjMzLWFmM2ItN2I3YzRkMzc3ZjhmIiwiaXNzIjoiaHR0cDovL2tleWNsb2FrOjgwODAvcmVhbG1zL21hc3RlciIsImF1ZCI6Imh0dHA6Ly9rZXljbG9hazo4MDgwL3JlYWxtcy9tYXN0ZXIiLCJ0eXAiOiJSZWZyZXNoIiwiYXpwIjoiYWRtaW4tY2xpIiwic2lkIjoiMmY5MTRmMGUtNzY5MC00MzVhLWJmOTUtZDg4NzIxM2ZjYThlIiwic2NvcGUiOiJwcm9maWxlIGJhc2ljIHdlYi1vcmlnaW5zIGFjciBlbWFpbCByb2xlcyJ9.9hSn0WBzbh3v5flTCybuo26tpT5g9R4FwFjf0sLybAkCBB-2nT8eXbSwEACg3gSj8RQGJR7oHFxUQT_6g4pEHQ",
+  "refresh_token": "<refresh-token>",
   "token_type": "Bearer",
   "not-before-policy": 0,
   "session_state": "2f914f0e-7690-435a-bf95-d887213fca8e",
@@ -156,30 +157,19 @@ Keycloak returns JSON that contains at least:
 }
 ```
 
-The bootstrap service extracts:
+The bootstrap service extracts `access_token` and uses it in all subsequent admin API calls.
 
-- `access_token`
-
-and uses it in later admin API calls.
+---
 
 ## Flow 3: identity-bootstrap-service -> Keycloak Admin User APIs
 
-After the bootstrap service gets an admin token, it calls several Keycloak admin endpoints.
+After obtaining an admin token the bootstrap service calls several Keycloak admin endpoints.
 
 ### Find User By Username
-
-Request:
 
 ```http
 GET /admin/realms/banking-poc/users?username=alice&exact=true
 Authorization: Bearer <admin-token>
-```
-
-Curl example:
-
-```bash
-curl -sS "http://keycloak:8080/admin/realms/banking-poc/users?username=alice&exact=true" \
-  -H "Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICJrcTd4OGlTZDl3TGwtOUpSRkZ0MzE0NFZ2bnF3eFJMcWFwMjNxUEQ1bjRRIn0.eyJleHAiOjE3ODE0NTEyMDcsImlhdCI6MTc4MTQ1MTE0NywianRpIjoiMTRkMjNhYjQtNjI4ZS00MjAxLWEwZTktNTYwYjEzNDYyNWVjIiwiaXNzIjoiaHR0cDovL2tleWNsb2FrOjgwODAvcmVhbG1zL21hc3RlciIsInR5cCI6IkJlYXJlciIsImF6cCI6ImFkbWluLWNsaSIsInNpZCI6ImNjZGM3MWU2LWNlMjQtNDljNC05YTYwLWQzNDkxMTgxMDhhNiIsInNjb3BlIjoicHJvZmlsZSBlbWFpbCJ9.AGJc5AxiYKjT-js-f8I1pFFsXoshYqhRiXAauDi_VdfSrQmpceUYMvHYjhX2v81dLh5xy1kcBo_tmbgHNryyh-st_-QQ68BsIyYtW_1GXpnbTWnX_eI9546Dcyjuy5hmosBuWgj7jLBOJhT54shiGRnRAA5RSTpsHWGNC9qSW8nnIlBtVIWbUZhIzeD2_za-CaAfCoICvLWFkjlC79oZjRL3eOpvn8k_px_djQMxWQdQqOEjKSERrm_d7AW9r_NjDl4RNMvrt7v-QudtwGO-sSuTSASRLshceS0a0Zj5yb1ryFUrTtT7u7_NSVNt_sYn_d22wFCb0n_gMbVBXasKaA"
 ```
 
 Response when not found:
@@ -200,12 +190,8 @@ Response when found:
     "email": "alice@example.local",
     "emailVerified": false,
     "attributes": {
-      "customer_id": [
-        "C-1001"
-      ],
-      "account_ids": [
-        "A-1001"
-      ]
+      "customer_id": ["C-1001"],
+      "account_ids": ["A-1001"]
     },
     "createdTimestamp": 1780652643152,
     "enabled": true,
@@ -226,15 +212,13 @@ Response when found:
 
 ### Create User
 
-Request:
-
 ```http
 POST /admin/realms/banking-poc/users
 Authorization: Bearer <admin-token>
 Content-Type: application/json
 ```
 
-Body example:
+Body:
 
 ```json
 {
@@ -258,14 +242,9 @@ Body example:
 }
 ```
 
-Response:
-
-- HTTP `201 Created`
-- `Location` header pointing to the new user resource
+Response: HTTP `201 Created` with a `Location` header pointing to the new user resource.
 
 ### Update Existing Demo-Managed User
-
-Request:
 
 ```http
 PUT /admin/realms/banking-poc/users/<userId>
@@ -273,7 +252,7 @@ Authorization: Bearer <admin-token>
 Content-Type: application/json
 ```
 
-Body example:
+Body:
 
 ```json
 {
@@ -291,8 +270,6 @@ Body example:
 ```
 
 ### Reset Password
-
-Request:
 
 ```http
 PUT /admin/realms/banking-poc/users/<userId>/reset-password
@@ -342,7 +319,7 @@ Authorization: Bearer <admin-token>
 Content-Type: application/json
 ```
 
-Body example:
+Body:
 
 ```json
 [
@@ -356,27 +333,20 @@ Body example:
 ]
 ```
 
+---
+
 ## Flow 4: Demo Script -> Keycloak Login Endpoint
 
-The script gets user tokens directly from Keycloak.
+The script gets user tokens directly from Keycloak using the Resource Owner Password Credentials grant.
 
 ### Request
 
-Method:
-
-- `POST`
-
-URL:
-
-- `http://localhost:9081/realms/banking-poc/protocol/openid-connect/token`
-
-Headers:
-
 ```http
+POST http://localhost:9081/realms/banking-poc/protocol/openid-connect/token
 Content-Type: application/x-www-form-urlencoded
 ```
 
-Form body example:
+Form body:
 
 ```text
 grant_type=password
@@ -398,14 +368,12 @@ curl -sS -X POST 'http://localhost:9081/realms/banking-poc/protocol/openid-conne
 
 ### Response
 
-Keycloak returns JSON like:
-
 ```json
 {
-  "access_token": "eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICIwQlllazY2dWVidWVjODRCcXhmd0o5X3F4SURyMVdrYS0xc2lCVDJ6MExrIn0.eyJleHAiOjE3ODE1ODA4MDQsImlhdCI6MTc4MTU4MDUwNCwianRpIjoiYzJjMWIyMzctMTUwMS00NjAyLWE0MmYtZjNiN2E1YTY5NTkwIiwiaXNzIjoiaHR0cDovL2tleWNsb2FrOjgwODAvcmVhbG1zL2JhbmtpbmctcG9jIiwiYXVkIjoibW9iaWxlLWJhbmtpbmctYXBwIiwic3ViIjoiMTM0ZDI0NDgtMzM0ZC00YmU1LTg4NjgtNGQxMzA4NWJmMmNkIiwidHlwIjoiQmVhcmVyIiwiYXpwIjoibW9iaWxlLWJhbmtpbmctYXBwIiwic2lkIjoiMzFmZDFjNjYtNDkzMC00NTM4LThmNmUtMDkxZTlhYjlmYjBjIiwiYWNyIjoiMSIsInJlYWxtX2FjY2VzcyI6eyJyb2xlcyI6WyJjdXN0b21lciJdfSwic2NvcGUiOiJlbWFpbCBwcm9maWxlIiwiYWNjb3VudF9pZHMiOlsiQS0xMDAxIl0sImVtYWlsX3ZlcmlmaWVkIjpmYWxzZSwibmFtZSI6ImFsaWNlIERlbW8iLCJwcmVmZXJyZWRfdXNlcm5hbWUiOiJhbGljZSIsImdpdmVuX25hbWUiOiJhbGljZSIsImN1c3RvbWVyX2lkIjoiQy0xMDAxIiwiZmFtaWx5X25hbWUiOiJEZW1vIiwiZW1haWwiOiJhbGljZUBleGFtcGxlLmxvY2FsIn0.L-ixwkwJRbbhW7C6ToR7fQpQIwN3EaBRKab3hvASmLuog0RyQM2ZkMIqVSzmcZCYQlgvbKzOWrI3SpKTTrGWowRnsU0Y0_gWZe6pIc4UUxOWfLrqmNcQAUP_IG5d8yf1hvQQuYhzOYvLGi6ckxc_MHmyfdoWWUNKrHxjOKmVwjAi7ib7syZh8K_6lEhQawPsno-kMwKJ17Yw0IDavzy4xiD06IoOYnmnS-jr0bmNrNgRfs92RtmztyBPUU2_V82Tj1hQ7X5oAiB1f-0Xss_oVcsUYYQNxDtsx2SsqLY21AVhvzgz-yctClt4tG8MhNUJr0z7mlbd11vTuFqSf6d6Tw",
+  "access_token": "<signed-jwt>",
   "expires_in": 300,
   "refresh_expires_in": 1800,
-  "refresh_token": "eyJhbGciOiJIUzUxMiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICJlY2VlNGJhYy0zNTc3LTQyNGQtODk2Zi0yYmY2OGJiN2RmNzIifQ.eyJleHAiOjE3ODE1ODIzMDQsImlhdCI6MTc4MTU4MDUwNCwianRpIjoiZTMwNmE4YjItZjIyNi00ODFhLTk3NGEtYWQ4OTRkNzFkYzU4IiwiaXNzIjoiaHR0cDovL2tleWNsb2FrOjgwODAvcmVhbG1zL2JhbmtpbmctcG9jIiwiYXVkIjoiaHR0cDovL2tleWNsb2FrOjgwODAvcmVhbG1zL2JhbmtpbmctcG9jIiwic3ViIjoiMTM0ZDI0NDgtMzM0ZC00YmU1LTg4NjgtNGQxMzA4NWJmMmNkIiwidHlwIjoiUmVmcmVzaCIsImF6cCI6Im1vYmlsZS1iYW5raW5nLWFwcCIsInNpZCI6IjMxZmQxYzY2LTQ5MzAtNDUzOC04ZjZlLTA5MWU5YWI5ZmIwYyIsInNjb3BlIjoiZW1haWwgcHJvZmlsZSBiYXNpYyBhY3Igcm9sZXMgd2ViLW9yaWdpbnMifQ.pAFHfn_B43gH7vmNfsMgOhgGCEvl9LtvgniZmALfrqiQz3Lyiwl_pCdjNHiqw-YXQ8oGu7ebArH5EhdSeL-qBA",
+  "refresh_token": "<refresh-token>",
   "token_type": "Bearer",
   "not-before-policy": 0,
   "session_state": "31fd1c66-4930-4538-8f6e-091e9ab9fb0c",
@@ -413,20 +381,17 @@ Keycloak returns JSON like:
 }
 ```
 
-The `access_token` field is the signed JWT itself.
-Its payload contains the identity and authorization claims that later components read after validation.
+The `access_token` is the signed JWT. Its payload contains the identity and authorization claims that later components read after validation. The script extracts `.access_token`.
 
 ### JWT Decode Example
 
-The returned `access_token` is a JWT in this format:
+A JWT has this structure:
 
 ```text
 header.payload.signature
 ```
 
-For the example above, decoding the first two segments gives the following content.
-
-Decoded header:
+Decoded header for an `alice` token:
 
 ```json
 {
@@ -436,7 +401,7 @@ Decoded header:
 }
 ```
 
-This header tells us that Keycloak signed the token with `RS256` and identifies the signing key with `kid`.
+The `kid` tells downstream systems which Keycloak public key to use for verification.
 
 Decoded payload:
 
@@ -467,62 +432,25 @@ Decoded payload:
 }
 ```
 
-In this decoded payload, you can see the actual claims that the rest of the system uses, such as:
-
-- `iss`: the issuing realm
-- `aud`: the intended client application
-- `preferred_username`: the human-readable username
-- `realm_access.roles`: the user's role
-- `customer_id`: the banking customer scope
-- `account_ids`: the accounts this token carries
+For the full claim-by-claim breakdown, see [Flow 5E](#flow-5e-which-claims-this-poc-uses-and-why).
 
 ### Signature
 
-The third JWT segment is the signature.
+The third JWT segment is the cryptographic signature. Keycloak generates it by signing the header and payload with its private key. Downstream systems verify it with Keycloak's public key (fetched via JWKS).
 
-It is a cryptographic proof created by Keycloak when the token is issued.
-Keycloak generates it by signing the header and payload with Keycloak's private key.
-Downstream systems verify it with Keycloak's public key.
+- If the header or payload changes after issuance, the signature no longer matches.
+- If the token was not issued by Keycloak, the signature cannot be verified.
+- Decoding lets you inspect claims. Signature verification or introspection is what lets you trust them.
 
-This is what makes the token trustworthy:
-
-- if the header or payload is changed after issuance, the signature no longer matches and verification fails
-- if the token was not issued by Keycloak, the signature cannot be verified with Keycloak's public key
-- if the token is only decoded but not verified, the claims are readable but not trustworthy
-
-So the rule is simple: decoding lets you inspect the claims, but signature verification or introspection is what lets you trust them.
-
-You can decode the header and payload locally to inspect them, but you must still validate the signature or introspect the token before trusting those values.
-
-The script extracts:
-
-- `.access_token`
+---
 
 ## Flow 5: JWT Claims Produced By Keycloak
 
-Before talking about where the claims come from, it helps to answer three basic questions:
+This section is the **canonical claim catalog** for this PoC. Docs [06](06-keycloak-idp.md), [08](08-opa.md), and [09](09-banking-api-service.md) link here rather than repeating this material.
 
-1. what are JWT claims?
-2. why do we need JWT claims?
-3. what problem do JWT claims solve?
+### Flow 5A: What JWT Claims Are
 
-## Flow 5A: What JWT Claims Are
-
-JWT claims are named pieces of information stored inside the JWT payload.
-
-You can think of a claim as:
-
-- a key-value fact about the authenticated user or token
-
-Examples of claims are:
-
-- who the user is
-- which system issued the token
-- which application the token is meant for
-- what roles the user has
-- what business-specific attributes belong to the user
-
-In JSON form, claims look like this:
+[JWT](01-concepts.md) claims are named key-value facts stored inside the token payload. Each field in the JSON object below is a claim:
 
 ```json
 {
@@ -534,177 +462,91 @@ In JSON form, claims look like this:
 }
 ```
 
-Each field in that JSON object is a claim.
+**Standard claims** are defined by JWT/OIDC conventions (`iss`, `aud`, `exp`, `sub`, `iat`). They solve common token-validation problems.
 
-### Standard Claims vs Custom Claims
+**Custom claims** are application-specific additions. In this PoC: `customer_id` and `account_ids`. They solve banking-domain authorization problems.
 
-There are two common types of claims:
+### Flow 5B: Why We Need JWT Claims
 
-#### Standard claims
-
-These are well-known claims defined by JWT/OIDC conventions.
-
-Examples:
-
-- `iss`: issuer
-- `aud`: audience
-- `exp`: expiry time
-- `sub`: subject identifier
-- `iat`: issued-at time
-
-These solve common token-validation problems.
-
-#### Custom claims
-
-These are application-specific claims added for business use.
-
-Examples in this PoC:
-
-- `customer_id`
-- `account_ids`
-
-These solve application-specific authorization problems.
-
-## Flow 5B: Why We Need JWT Claims
-
-After a user logs in, downstream systems still need context.
-
-For example, Kong, OPA, and `banking-api-service` need to know things like:
+After a user logs in, [Kong](01-concepts.md) (PEP), [OPA](01-concepts.md) (PDP), and `banking-api-service` each need to know:
 
 - who is calling
 - whether the token came from the right issuer
-- whether the token is meant for this application
 - what role the user has
 - which customer/account scope belongs to the user
 
-JWT claims carry that context.
+Claims carry that context with the request so each component does not have to query another system for every call.
 
-Without claims, every downstream component would have to repeatedly ask another system questions like:
+### Flow 5C: What Problem JWT Claims Solve
 
-- Who is this user?
-- What roles do they have?
-- Which customer do they belong to?
-- Which accounts are they allowed to access?
+| Problem | Claims used |
+|---|---|
+| Identity propagation | `preferred_username`, `sub` |
+| Token validation context | `iss`, `aud`, `exp` |
+| Authorization context | `realm_access.roles`, `customer_id`, `account_ids` |
+| Reducing repeated lookups | all of the above carried in-token |
 
-Claims let the token carry the important answers.
+### Flow 5D: What JWT Claims Do Not Solve
 
-## Flow 5C: What Problem JWT Claims Solve
+Claims are not sufficient on their own.
 
-JWT claims solve several real distributed-system problems.
+- A decoded claim is not automatically trustworthy — anyone can craft a fake JWT string.
+- A valid token can still be unauthorized for a specific action.
+- If the source of truth changes, old tokens still contain the claim values they had at issuance until they expire.
 
-### Problem 1: Identity Propagation
+That is why this PoC still uses Keycloak introspection in Kong, JWT validation in `banking-api-service`, OPA policy evaluation, and service-side authorization checks.
 
-Once a user logs in, multiple downstream components need to know who the user is.
+### Flow 5E: Which Claims This PoC Uses And Why
 
-Claims solve this by carrying identity information inside the token.
+#### `iss`
 
-Example:
+- Meaning: which Keycloak realm issued the token (`http://keycloak:8080/realms/banking-poc`)
+- Used by: `banking-api-service`
+- Purpose: reject tokens not issued by this realm
 
-- `preferred_username = alice`
-- `sub = 134d2448-334d-4be5-8868-4d13085bf2cd`
+#### `aud`
 
-### Problem 2: Token Validation Context
+- Meaning: which client/application the token is meant for (`mobile-banking-app`)
+- Used by: `banking-api-service`
+- Purpose: reject tokens not intended for this application
 
-Services need to know whether the token is trustworthy.
+#### `preferred_username`
 
-Claims help with that too.
+- Meaning: human-readable username (`alice` or `ops-admin`)
+- Used by: Kong (logging, OPA input), diagnostics
+- Purpose: identity context; also forwarded as `input.username` to OPA
 
-Examples:
+#### `realm_access.roles`
 
-- `iss` tells the service who issued the token
-- `aud` tells the service who the token is meant for
-- `exp` tells the service when the token expires
+- Meaning: realm roles assigned to the user (`["customer"]` or `["ops-admin"]`)
+- Used by: Kong, OPA, `banking-api-service`
+- Purpose: distinguish `customer` from `ops-admin`; Kong extracts the first role and sends it as `input.role` to OPA
 
-Without these claims, the token would be much harder to validate safely.
+#### `customer_id`
 
-### Problem 3: Authorization Context Propagation
+- Meaning: business identifier for the banking customer (`C-1001` for `alice`, `C-9999` for `ops-admin`)
+- Used by: OPA (`input.customer_id`), `banking-api-service`
+- Purpose: connect authenticated identity to banking ownership; OPA checks `customer_id != ""` for the `customer` role
 
-A valid identity is not enough.
+#### `account_ids`
 
-The system also needs enough information to make authorization decisions.
+- Meaning: accounts the token carries (`["A-1001"]` for `alice`, `["A-1001","A-2001"]` for `ops-admin`)
+- Used by: OPA (`input.account_ids`), `banking-api-service`
+- Purpose: account-level authorization; OPA checks that the requested `account_id` is in `account_ids`
 
-Claims solve this by carrying authorization-related context.
+#### `sub`
 
-Examples in this PoC:
+- Meaning: Keycloak internal user UUID
+- Used by: `banking-api-service` (Spring Security principal)
+- Purpose: stable unique identifier for the subject
 
-- `realm_access.roles = ["customer"]`
-- `customer_id = C-1001`
-- `account_ids = ["A-1001"]`
+#### `exp` / `iat` / `jti`
 
-That lets OPA and Spring Boot decide whether `alice` may access `A-1001`.
+- Meaning: expiry time, issued-at time, JWT ID
+- Used by: token validation in Kong (via introspection) and Spring Security
+- Purpose: prevent token reuse after expiry; provide audit trail
 
-### Problem 4: Reducing Repeated Lookups
-
-If every service had to call Keycloak or another database for every request just to learn the caller's identity and scope, the system would become:
-
-- slower
-- more tightly coupled
-- more complex
-
-Claims reduce that repeated lookup cost by carrying the needed context with the request.
-
-## Flow 5D: What JWT Claims Do Not Solve
-
-Claims are useful, but they are not magic.
-
-Claims do not solve:
-
-- policy logic by themselves
-- token trust by themselves
-- stale business data by themselves
-
-Important examples:
-
-- a decoded claim is not automatically trustworthy
-- a valid token can still be unauthorized for a specific action
-- if the source of truth changes, old tokens can still contain older claim values until they expire
-
-That is why this PoC still uses:
-
-- Keycloak introspection in Kong
-- JWT validation in Spring Boot
-- OPA policy evaluation
-- service-side authorization checks
-
-## Flow 5E: Which Claims This PoC Uses And Why
-
-### `iss`
-
-- meaning: who issued the token
-- used by: Spring Boot
-- purpose: reject tokens not issued by this Keycloak realm
-
-### `aud`
-
-- meaning: which client/application the token is meant for
-- used by: Spring Boot
-- purpose: reject tokens not meant for `mobile-banking-app`
-
-### `preferred_username`
-
-- meaning: human-readable username
-- used by: Kong and diagnostics
-- purpose: helpful identity context for logging and policy input
-
-### `realm_access.roles`
-
-- meaning: realm roles assigned to the user
-- used by: Kong, OPA, Spring Boot
-- purpose: distinguish `customer` from `ops-admin`
-
-### `customer_id`
-
-- meaning: business identifier for the banking customer
-- used by: OPA and Spring Boot
-- purpose: connect the authenticated identity to banking ownership context
-
-### `account_ids`
-
-- meaning: which accounts the token claims this user can access
-- used by: OPA and Spring Boot
-- purpose: account-level authorization
-
-## Flow 5F: JWT Claims In This PoC At A Glance
+### Flow 5F: JWT Claims In This PoC At A Glance
 
 ```mermaid
 flowchart LR
@@ -714,31 +556,19 @@ preferred_username sub]
     K --> C2[Validation claims
 iss aud exp]
     K --> C3[Authorization claims
-roles customer_id account_ids]
+realm_access.roles customer_id account_ids]
     C1 --> G[Kong]
-    C2 --> S[Spring Security]
+    C2 --> S[banking-api-service Spring Security]
     C3 --> O[OPA and service guard]
 ```
 
-This is the point where many people ask an important question:
+Claims originate in Keycloak. Kong and `banking-api-service` read them — they do not invent them.
 
-- where do these JWT claims actually come from?
+### Flow 5G: Where The Claims Come From
 
-The short answer is:
+#### Step 1: User Attributes Written Into Keycloak
 
-1. `identity-bootstrap-service` writes user attributes into Keycloak
-2. Keycloak protocol mappers copy those attributes into the token
-3. Keycloak signs the JWT
-4. Kong and Spring later read those claims from the JWT payload
-
-So the claims are not invented by Kong or Spring Boot.
-They originate in Keycloak.
-
-## Flow 5G: Where The Claims Come From
-
-### Step 1: Demo User Attributes Are Written Into Keycloak
-
-When `identity-bootstrap-service` creates or updates a user, it sends user attributes like this:
+When `identity-bootstrap-service` creates or updates a user it sends:
 
 ```json
 {
@@ -750,7 +580,7 @@ When `identity-bootstrap-service` creates or updates a user, it sends user attri
 }
 ```
 
-That data is produced by the Java code in `KeycloakAdminProvisioner`:
+That comes from `KeycloakAdminProvisioner`:
 
 ```java
 private Map<String, List<String>> attributes(DemoUserRequest request) {
@@ -761,39 +591,18 @@ private Map<String, List<String>> attributes(DemoUserRequest request) {
 }
 ```
 
-So for `alice`, Keycloak stores:
+For `alice`: `customer_id = C-1001`, `account_ids = [A-1001]`.  
+For `ops-admin`: `customer_id = C-9999`, `account_ids = [A-1001, A-2001]`.
 
-- `customer_id = C-1001`
-- `account_ids = [A-1001]`
+#### Step 2: Realm Roles Stored In Keycloak
 
-For `ops-admin`, Keycloak stores:
+The bootstrap service assigns a realm role (`customer` or `ops-admin`). Keycloak automatically places realm roles into the token under `realm_access.roles`. Both roles are declared in `infra/keycloak/realm-export.json`.
 
-- `customer_id = C-9999`
-- `account_ids = [A-1001, A-2001]`
+#### Step 3: Protocol Mappers Copy Attributes Into The Token
 
-### Step 2: Realm Roles Are Stored In Keycloak
+The `mobile-banking-app` client in `infra/keycloak/realm-export.json` has three protocol mappers. These mappers are the bridge between stored user attributes and JWT claims.
 
-The bootstrap service also assigns a realm role such as:
-
-- `customer`
-- `ops-admin`
-
-Keycloak automatically places realm roles into the token under:
-
-- `realm_access.roles`
-
-### Step 3: Protocol Mappers Copy Attributes Into The Token
-
-In `infra/keycloak/realm-export.json`, the client `mobile-banking-app` has protocol mappers.
-
-These mappers are the bridge between:
-
-- stored user attributes in Keycloak
-- claims visible in the JWT
-
-For example:
-
-#### `customer_id` mapper
+**`customer_id` mapper** — reads the `customer_id` user attribute and places it into the access token claim `customer_id` as a `String`:
 
 ```json
 {
@@ -802,17 +611,13 @@ For example:
   "config": {
     "access.token.claim": "true",
     "claim.name": "customer_id",
-    "user.attribute": "customer_id"
+    "user.attribute": "customer_id",
+    "jsonType.label": "String"
   }
 }
 ```
 
-Meaning:
-
-- read the Keycloak user attribute named `customer_id`
-- place it into the access token claim named `customer_id`
-
-#### `account_ids` mapper
+**`account_ids` mapper** — reads the `account_ids` user attribute and places it into the access token claim `account_ids` as a multivalued `String` array:
 
 ```json
 {
@@ -822,18 +627,13 @@ Meaning:
     "access.token.claim": "true",
     "claim.name": "account_ids",
     "user.attribute": "account_ids",
+    "jsonType.label": "String",
     "multivalued": "true"
   }
 }
 ```
 
-Meaning:
-
-- read the Keycloak user attribute named `account_ids`
-- place it into the access token claim named `account_ids`
-- keep it as an array because it is multivalued
-
-#### audience mapper
+**`mobile-banking-app-audience` mapper** — adds `mobile-banking-app` to the token audience:
 
 ```json
 {
@@ -846,25 +646,15 @@ Meaning:
 }
 ```
 
-Meaning:
+That is why `banking-api-service` can check `aud = mobile-banking-app`.
 
-- add `mobile-banking-app` into the token audience claim
-
-That is why Spring Boot later expects:
-
-- `aud = mobile-banking-app`
-
-## Flow 5H: How The JWT Is Structured
-
-A JWT has three parts:
+### Flow 5H: How The JWT Is Structured
 
 ```text
 header.payload.signature
 ```
 
 Each part is Base64URL-encoded.
-
-### JWT Structure Diagram
 
 ```mermaid
 flowchart LR
@@ -876,15 +666,7 @@ flowchart LR
     D3 --> J
 ```
 
-### Header
-
-The header describes the token metadata, usually things like:
-
-- signing algorithm
-- key ID
-- token type
-
-Example:
+**Header** — signing algorithm, key ID, token type:
 
 ```json
 {
@@ -894,18 +676,7 @@ Example:
 }
 ```
 
-### Payload
-
-The payload contains the claims.
-
-This is the part Kong decodes in the plugin when it wants to read values like:
-
-- `preferred_username`
-- `customer_id`
-- `account_ids`
-- `realm_access.roles`
-
-Example payload shape in this PoC:
+**Payload** — the claims. This is what Kong decodes after introspection and what Spring Security exposes via the `Jwt` principal:
 
 ```json
 {
@@ -920,20 +691,11 @@ Example payload shape in this PoC:
 }
 ```
 
-### Signature
+**Signature** — cryptographic proof created by Keycloak with its private key. Decoding the payload is easy. Trusting it requires validation.
 
-The signature proves the token was signed by the issuer.
+### Flow 5I: Why Kong Can Decode Claims But Still Must Validate
 
-Important security idea:
-
-- decoding the payload is easy
-- trusting the payload is not safe until the token is validated
-
-That is why this PoC does not rely on raw decoding alone.
-
-## Flow 5I: Why Kong Can Decode Claims But Still Must Validate
-
-The Kong plugin contains code that decodes the JWT payload segment:
+The Kong plugin decodes the JWT payload segment locally to read claims:
 
 ```lua
 local function decode_claims(token)
@@ -943,44 +705,31 @@ local function decode_claims(token)
 end
 ```
 
-This lets Kong read claims from the payload.
+But payload decoding alone is unsafe — anyone can craft a string that looks like a JWT. So Kong first calls Keycloak introspection:
 
-But payload decoding alone is not enough, because anyone can create a fake string that looks like a JWT.
+1. Kong receives the bearer token.
+2. Kong calls the Keycloak introspection endpoint.
+3. Keycloak responds with `active: true` or `active: false`.
+4. Only then does Kong use the decoded payload to build OPA input.
 
-So the plugin first calls Keycloak introspection:
+That is the difference between reading claims and trusting claims.
 
-1. Kong receives bearer token
-2. Kong calls Keycloak introspection endpoint
-3. Keycloak responds with `active: true` or `active: false`
-4. only then does Kong use the decoded payload to build OPA input
+### Flow 5J: How banking-api-service Retrieves The Same Claims
 
-That is the difference between:
+`banking-api-service` does not do manual Base64 decoding. Instead:
 
-- reading claims
-- trusting claims
+1. Spring Security validates the JWT signature and checks `iss` and `aud`.
+2. It creates a validated `Jwt` principal object.
+3. Controller and guard code read claims from that object:
+   - `jwt.getClaimAsString("customer_id")`
+   - `jwt.getClaimAsStringList("account_ids")`
+   - `realm_access.roles` (via a custom converter)
 
-## Flow 5J: How Spring Boot Retrieves The Same Claims
+The same claim values therefore flow through two separate enforcement paths:
+- Kong → OPA path
+- `banking-api-service` service-side defense-in-depth path
 
-Spring Boot does not parse claims by doing manual Base64 decoding.
-
-Instead:
-
-1. Spring Security validates the JWT
-2. it creates a `Jwt` principal object
-3. controller and guard code read claims from that validated `Jwt`
-
-Examples from the banking service:
-
-- `jwt.getClaimAsString("customer_id")`
-- `jwt.getClaimAsStringList("account_ids")`
-- reading `realm_access.roles`
-
-So the same claim values are used in two places:
-
-- Kong -> OPA path
-- Spring service-side defense-in-depth path
-
-## Flow 5K: End-To-End Claim Pipeline For `alice`
+### Flow 5K: End-To-End Claim Pipeline For `alice`
 
 ```mermaid
 flowchart LR
@@ -995,14 +744,14 @@ account_ids
 aud
 realm_access.roles]
     E --> F[Kong decodes claims after introspection]
-    E --> G[Spring Security validates and exposes Jwt claims]
+    E --> G[banking-api-service validates and exposes Jwt claims]
     F --> H[OPA input]
     G --> I[service-side account guard]
 ```
 
-### Concrete Example For `alice`
+**Concrete example — `alice`**
 
-Input stored in Keycloak user profile:
+User attributes stored in Keycloak:
 
 ```json
 {
@@ -1029,7 +778,7 @@ Audience added by mapper:
 }
 ```
 
-Final useful payload seen by the rest of the system:
+Final representative payload seen by the rest of the system:
 
 ```json
 {
@@ -1044,34 +793,21 @@ Final useful payload seen by the rest of the system:
 }
 ```
 
-Important claims in this PoC token include:
+Why each claim matters:
 
-```json
-{
-  "iss": "http://keycloak:8080/realms/banking-poc",
-  "aud": "mobile-banking-app",
-  "preferred_username": "alice",
-  "realm_access": {
-    "roles": ["customer"]
-  },
-  "customer_id": "C-1001",
-  "account_ids": ["A-1001"]
-}
-```
+| Claim | Consumer | Purpose |
+|---|---|---|
+| `iss` | `banking-api-service` | Checks the token came from this Keycloak realm |
+| `aud` | `banking-api-service` | Checks the token is intended for `mobile-banking-app` |
+| `realm_access.roles` | Kong, OPA, `banking-api-service` | Distinguishes `customer` from `ops-admin` |
+| `customer_id` | OPA, `banking-api-service` | Links identity to banking ownership |
+| `account_ids` | OPA, `banking-api-service` | Account-level authorization |
 
-Why these matter:
-
-- `iss`: Spring Boot checks the issuer
-- `aud`: Spring Boot checks that the token is meant for `mobile-banking-app`
-- `realm_access.roles`: Kong and Spring use roles
-- `customer_id`: Spring uses it for defense-in-depth checks
-- `account_ids`: Kong sends it to OPA and Spring uses it too
+---
 
 ## Flow 6: Client -> Kong
 
-The client calls Kong through:
-
-- `http://localhost:8000/api/accounts/...`
+The client calls Kong at `http://localhost:8000/api/accounts/...`. Kong routes all `/api/accounts` traffic via the `banking-api-route` route defined in `infra/kong/kong.yml`.
 
 ### Example Request
 
@@ -1081,54 +817,28 @@ Host: localhost:8000
 Authorization: Bearer <jwt>
 ```
 
-If the token is missing, Kong returns:
+| Condition | Response |
+|---|---|
+| Missing token | `401 {"message":"missing bearer token"}` |
+| Malformed token | `401 {"message":"invalid bearer token"}` |
 
-```http
-HTTP/1.1 401 Unauthorized
-Content-Type: application/json; charset=utf-8
-
-{"message":"missing bearer token"}
-```
-
-If the token is malformed, Kong returns:
-
-```http
-HTTP/1.1 401 Unauthorized
-Content-Type: application/json; charset=utf-8
-
-{"message":"invalid bearer token"}
-```
+---
 
 ## Flow 7: Kong -> Keycloak Introspection
 
-Before Kong uses the token claims for OPA input, it introspects the token.
+Before using token claims for [OPA](01-concepts.md) input, Kong introspects the token. The `opa-authz` plugin in `infra/kong/kong.yml` is configured with `introspection_url`, `introspection_client_id` (`kong-introspection`), and `introspection_client_secret` (`kong-introspection-secret`).
 
 ### Request
 
-Method:
-
-- `POST`
-
-URL:
-
-- `http://keycloak:8080/realms/banking-poc/protocol/openid-connect/token/introspect`
-
-Headers:
-
 ```http
+POST http://keycloak:8080/realms/banking-poc/protocol/openid-connect/token/introspect
 Authorization: Basic base64(kong-introspection:kong-introspection-secret)
 Content-Type: application/x-www-form-urlencoded
-```
 
-Body:
-
-```text
 token=<jwt>
 ```
 
-### Response For A Valid Token
-
-Typical response:
+### Response — Valid Token
 
 ```json
 {
@@ -1144,9 +854,7 @@ Typical response:
 }
 ```
 
-### Response For A Tampered Or Invalid Token
-
-Typical response:
+### Response — Tampered Or Inactive Token
 
 ```json
 {
@@ -1163,27 +871,22 @@ Content-Type: application/json; charset=utf-8
 {"message":"inactive token"}
 ```
 
+---
+
 ## Flow 8: Kong -> OPA
 
-If introspection says the token is active, Kong decodes JWT claims locally and constructs a JSON body for OPA.
+If introspection returns `active: true`, Kong decodes the JWT claims locally and sends them to [OPA](01-concepts.md).
+
+The OPA endpoint is `http://opa:8181/v1/data/banking_authz/allow` (from `infra/kong/kong.yml`). The policy lives in `infra/opa/policies/banking_authz.rego`.
 
 ### Request
 
-Method:
-
-- `POST`
-
-URL:
-
-- `http://opa:8181/v1/data/banking_authz/allow`
-
-Headers:
-
 ```http
+POST http://opa:8181/v1/data/banking_authz/allow
 Content-Type: application/json
 ```
 
-Body example for `alice` accessing `A-1001`:
+Body for `alice` accessing `A-1001`:
 
 ```json
 {
@@ -1199,7 +902,43 @@ Body example for `alice` accessing `A-1001`:
 }
 ```
 
-### Response From OPA When Allowed
+**Input field mapping** — all fields come from the JWT claims Kong decoded after introspection:
+
+| OPA input field | Source claim | Notes |
+|---|---|---|
+| `method` | HTTP method | From the incoming request |
+| `path` | HTTP path | From the incoming request |
+| `account_id` | path segment | Extracted from `/api/accounts/{id}` |
+| `customer_id` | `customer_id` | JWT custom claim |
+| `account_ids` | `account_ids` | JWT custom claim array |
+| `role` | `realm_access.roles[0]` | First realm role |
+| `username` | `preferred_username` | JWT standard claim |
+
+### OPA Policy Logic (from `banking_authz.rego`)
+
+```rego
+allow {
+    read_only_account_request
+    input.role == "ops-admin"
+}
+
+allow {
+    read_only_account_request
+    input.role == "customer"
+    input.customer_id != ""
+    account_ids := object.get(input, "account_ids", [])
+    account_ids[_] == input.account_id
+}
+
+read_only_account_request {
+    input.method == "GET"
+    regex.match("^/api/accounts/[^/]+(?:/transactions)?$", input.path)
+}
+```
+
+`ops-admin` gets read access to any account. `customer` must have a non-empty `customer_id` and the requested `account_id` must appear in their `account_ids`.
+
+### Response — Allowed
 
 ```json
 {
@@ -1207,7 +946,7 @@ Body example for `alice` accessing `A-1001`:
 }
 ```
 
-### Response From OPA When Denied
+### Response — Denied
 
 ```json
 {
@@ -1215,7 +954,7 @@ Body example for `alice` accessing `A-1001`:
 }
 ```
 
-If OPA returns `false`, Kong returns:
+Kong returns:
 
 ```http
 HTTP/1.1 403 Forbidden
@@ -1224,22 +963,22 @@ Content-Type: application/json; charset=utf-8
 {"message":"forbidden"}
 ```
 
+---
+
 ## Flow 9: Kong -> banking-api-service
 
-If OPA allows the request, Kong forwards it to:
+If OPA returns `result: true`, Kong forwards the request to `http://banking-api-service:8080` (configured as the `banking-api` service in `infra/kong/kong.yml`).
 
-- `http://banking-api-service:8080`
-
-### Forwarded Request Example
+### Forwarded Request
 
 ```http
 GET /api/accounts/A-1001 HTTP/1.1
 Authorization: Bearer <jwt>
 ```
 
-The banking service receives the bearer token and Spring Security treats it as the service's own authentication boundary.
+Kong passes the original bearer token unchanged. `banking-api-service` is the [resource server](01-concepts.md) and treats this as its own authentication boundary.
 
-At a high level, Flow 9 works like this:
+### Spring Security Validation Flow
 
 ```mermaid
 flowchart LR
@@ -1252,62 +991,58 @@ flowchart LR
   G --> H[Repository returns account data or service rejects request]
 ```
 
-For this PoC, that validation is driven by the banking service config in [services/banking-api-service/src/main/resources/application.yml](/Users/phil.g.s.zhou/hsbc/dsp3/draft/services/banking-api-service/src/main/resources/application.yml):
+Spring Security is configured via `application.yml`:
 
-- `spring.security.oauth2.resourceserver.jwt.jwk-set-uri` tells Spring where to fetch Keycloak's public keys
-- `banking-api.security.issuer-uri` tells Spring which Keycloak realm must have issued the token
-- `banking-api.security.audience` tells Spring which client the token must be meant for
+- `spring.security.oauth2.resourceserver.jwt.jwk-set-uri` — where to fetch Keycloak's public keys
+- `banking-api.security.issuer-uri` — which Keycloak realm must have issued the token
+- `banking-api.security.audience` — which client the token must be intended for (`mobile-banking-app`)
 
-What that means in practice:
+Validation steps:
 
-1. Spring extracts the bearer token from the `Authorization` header.
-2. `NimbusJwtDecoder` loads the JWKs from the configured JWKS endpoint.
-3. The JWT signature is verified against Keycloak's public key.
-4. The issuer must match the configured realm URI.
-5. The audience must contain `mobile-banking-app`.
-6. If any of those checks fail, Spring Security returns `401 Unauthorized` and the controller is never called.
+1. Extract the bearer token from the `Authorization` header.
+2. `NimbusJwtDecoder` loads JWKs from the JWKS endpoint.
+3. Verify the JWT signature against Keycloak's public key.
+4. Check that `iss` matches the configured realm URI.
+5. Check that `aud` contains `mobile-banking-app`.
+6. If any check fails, Spring Security returns `401 Unauthorized` before the controller is called.
 
-Once the token is accepted, Spring injects the validated token into the controller method as `@AuthenticationPrincipal Jwt jwt`.
+### Service-Side Authorization Guard
 
-Then the banking service applies its own authorization guard before returning data:
+Once the token is accepted, `AccountAccessGuard` applies its own rules before returning data:
 
-- `ops-admin` can access any account
-- `customer` must have a non-empty `customer_id`
-- `customer` must have the requested `accountId` in `account_ids`
-- for the account details endpoint, the account record must also match both `customer_id` and `account_ids`
+| Role | Rule |
+|---|---|
+| `ops-admin` | Access any account |
+| `customer` | Must have non-empty `customer_id`; requested `accountId` must appear in `account_ids` |
 
-If the token is missing or the claims do not match the requested account, the guard throws `401` or `403` accordingly.
-That means the banking API is protected twice:
-
-- by Spring Security's JWT validation at the edge of the service
-- by `AccountAccessGuard` inside the controller path using token claims
-
-Why bother validating again if Kong already checked the token?
-
-- Kong is a gateway control point, not the banking service's trust boundary.
-- The banking service still needs to defend itself if it is called directly, bypassing Kong, or if the gateway is misconfigured or compromised.
-- Kong's check answers "should this request enter the platform?" while Spring's check answers "should this service trust and use this token?"
-- The service also needs the validated `Jwt` object so controller and guard code can make account-specific decisions from claims like `customer_id` and `account_ids`.
-
-So the second validation is defense in depth: the gateway filters bad traffic early, and the service still enforces its own security rules before returning banking data.
-
-For the signature and trust model behind that verification, see [09-jwt-signature-validation.md](/Users/phil.g.s.zhou/hsbc/dsp3/draft/docs/09-jwt-signature-validation.md).
-
-Then the service reads claims such as:
+The service reads these claims from the validated `Jwt` principal:
 
 - `realm_access.roles`
 - `customer_id`
 - `account_ids`
 
+If the token is missing or claims do not match, the guard throws `401` or `403` accordingly.
+
+**Why validate again after Kong already checked?**
+
+- Kong is a gateway control point, not the banking service's trust boundary.
+- The service must defend itself if called directly, bypassing Kong, or if the gateway is misconfigured.
+- Kong answers "should this request enter the platform?" — the service answers "should I trust and act on this token?"
+- The service needs the validated `Jwt` object so guard code can make account-specific decisions.
+
+This is defense in depth: Kong filters bad traffic early; the service still enforces its own rules before returning banking data.
+
+For the signature and trust model, see [11 — JWT Signature Validation](11-jwt-signature-validation.md) and [12 — JWKS](12-jwks.md).
+
+---
+
 ## Flow 10: banking-api-service Responses
 
 ### Account Details Success
 
-Endpoint:
-
-- `GET /api/accounts/A-1001`
-
-Response:
+```http
+GET /api/accounts/A-1001
+```
 
 ```json
 {
@@ -1319,11 +1054,9 @@ Response:
 
 ### Transactions Success
 
-Endpoint:
-
-- `GET /api/accounts/A-1001/transactions`
-
-Response:
+```http
+GET /api/accounts/A-1001/transactions
+```
 
 ```json
 [
@@ -1334,90 +1067,43 @@ Response:
 ]
 ```
 
-### Unknown Account
+### Error Responses
 
-For both controllers, if the account ID does not exist after authorization checks, the service returns:
+| Condition | Status |
+|---|---|
+| Account not found (after auth passes) | `404 Not Found` |
+| Valid token but claims forbid access (direct/internal call) | `403 Forbidden` |
+| Token fails JWT validation | `401 Unauthorized` |
 
-```http
-HTTP/1.1 404 Not Found
-```
-
-### Forbidden At Service Layer
-
-If a direct/internal call reaches the banking service with a valid token but the claims do not allow access, the service returns:
-
-```http
-HTTP/1.1 403 Forbidden
-```
-
-### Invalid JWT At Service Layer
-
-If a request reaches the banking service with a token that fails JWT validation, Spring Security returns:
-
-```http
-HTTP/1.1 401 Unauthorized
-```
+---
 
 ## Flow 11: Which Component Sends Which Important Header
 
-### Demo Script -> identity-bootstrap-service
+| Hop | Key headers |
+|---|---|
+| Demo Script → `identity-bootstrap-service` | `X-Demo-Bootstrap-Secret`, `Content-Type: application/json` |
+| `identity-bootstrap-service` → Keycloak token endpoint | `Content-Type: application/x-www-form-urlencoded` |
+| `identity-bootstrap-service` → Keycloak admin APIs | `Authorization: Bearer <admin-token>`, `Content-Type: application/json` (writes) |
+| Client → Kong | `Authorization: Bearer <jwt>` |
+| Kong → Keycloak introspection | `Authorization: Basic <base64(clientId:clientSecret)>`, `Content-Type: application/x-www-form-urlencoded` |
+| Kong → OPA | `Content-Type: application/json` |
+| Kong → `banking-api-service` | forwarded `Authorization: Bearer <jwt>` |
 
-- `X-Demo-Bootstrap-Secret`
-- `Content-Type: application/json`
-
-### identity-bootstrap-service -> Keycloak Token Endpoint
-
-- `Content-Type: application/x-www-form-urlencoded`
-
-### identity-bootstrap-service -> Keycloak Admin APIs
-
-- `Authorization: Bearer <admin-token>`
-- `Content-Type: application/json` for write operations
-
-### Client -> Kong
-
-- `Authorization: Bearer <jwt>`
-
-### Kong -> Keycloak Introspection
-
-- `Authorization: Basic <base64(clientId:clientSecret)>`
-- `Content-Type: application/x-www-form-urlencoded`
-
-### Kong -> OPA
-
-- `Content-Type: application/json`
-
-### Kong -> banking-api-service
-
-- forwarded `Authorization: Bearer <jwt>`
+---
 
 ## Quick Comparison Table
 
-| Sender                     | Receiver                   | Main purpose                  | Body style                 |
-| -------------------------- | -------------------------- | ----------------------------- | -------------------------- |
-| Demo script                | identity-bootstrap-service | Create demo user              | JSON                       |
-| identity-bootstrap-service | Keycloak token endpoint    | Get admin token               | Form URL encoded           |
-| identity-bootstrap-service | Keycloak admin API         | Create/update users and roles | JSON                       |
-| Demo script                | Keycloak token endpoint    | Get user JWT                  | Form URL encoded           |
-| Client                     | Kong                       | Call protected banking API    | Usually no body for GET    |
-| Kong                       | Keycloak introspection     | Validate token activity       | Form URL encoded           |
-| Kong                       | OPA                        | Ask policy decision           | JSON                       |
-| Kong                       | banking-api-service        | Forward allowed request       | Forwarded original request |
+| Sender | Receiver | Main purpose | Body style |
+|---|---|---|---|
+| Demo script | `identity-bootstrap-service` | Create demo user | JSON |
+| `identity-bootstrap-service` | Keycloak token endpoint | Get admin token | Form URL-encoded |
+| `identity-bootstrap-service` | Keycloak admin API | Create/update users and roles | JSON |
+| Demo script | Keycloak token endpoint | Get user JWT | Form URL-encoded |
+| Client | Kong | Call protected banking API | Usually no body for GET |
+| Kong | Keycloak introspection | Validate token activity | Form URL-encoded |
+| Kong | OPA | Ask policy decision | JSON |
+| Kong | `banking-api-service` | Forward allowed request | Forwarded original request |
 
-## Why This Level Of Detail Matters
+---
 
-At the architecture level, it is easy to say:
-
-- Keycloak authenticates
-- Kong enforces
-- OPA decides
-- Spring Boot serves data
-
-At the payload level, the system becomes clearer because you can see:
-
-- which component sends form data
-- which one sends JSON
-- which claims are extracted from the token
-- why a request becomes `200`, `401`, `403`, or `404`
-
-That is the real wire-level story of this PoC.
+← Prev: [13 — Access & Refresh Token Lifecycle](13-token-lifecycle.md)
