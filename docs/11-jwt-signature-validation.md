@@ -1,28 +1,24 @@
-# 09 JWT Signature, Validation, And Introspection
+# 11 — JWT Signature, Validation & Introspection
 
-This page explains how JWT signatures, validation, introspection, and claims work with Keycloak in this PoC.
+How tokens are signed, validated, and introspected in this PoC — and why `Keycloak` can return `active: false` even for a structurally valid, unexpired JWT.
 
-For a deeper key-distribution explanation, see `10-jwks-deep-dive.md`.
+> **Part III · Token Mechanics** — Prereqs: [06](06-keycloak-idp.md), [07](07-kong.md)
 
-The short version is:
+See [01 — Concepts](01-concepts.md) for the locked terminology used throughout: `Keycloak` (IdP), `Kong` (PEP), `OPA` (PDP), `banking-api-service` (resource server).
 
-- Keycloak issues the token
-- Keycloak signs the token with its private key
-- services verify the signature with Keycloak's public key
-- services may also introspect the token against Keycloak before trusting it
-- the claims live in the JWT payload
+---
 
 ## The Four Pieces
 
 ### 1. Signature
 
-The signature is the cryptographic proof that Keycloak created the token.
+The signature is the cryptographic proof that `Keycloak` created the token.
 
-It is produced when Keycloak issues the access token by signing the token header and payload with Keycloak's private key.
+It is produced when `Keycloak` issues the access token by signing the token header and payload with `Keycloak`'s private key.
 
 Why it matters:
 
-- it proves the token came from Keycloak
+- it proves the token came from `Keycloak`
 - it proves the payload was not changed after issuance
 - it prevents a caller from forging a fake token that looks valid just by Base64URL-encoding data
 
@@ -33,20 +29,20 @@ Validation means checking that the token is genuine and acceptable for the reque
 Typical validation checks are:
 
 - the signature is valid
-- the token is not expired
-- the issuer is the expected Keycloak realm
-- the audience matches the client or API
+- the token is not expired (`exp`)
+- the issuer (`iss`) matches the expected `Keycloak` realm
+- the audience (`aud`) matches the client or API
 
 In this PoC:
 
-- Spring Boot validates JWTs locally
-- Kong also relies on Keycloak introspection before it trusts a token for policy decisions
+- `banking-api-service` validates JWTs locally using JWKS
+- `Kong` uses `Keycloak` introspection before it trusts a token for policy decisions
 
 ### 3. Introspection
 
-Introspection is a live call from a service to Keycloak's introspection endpoint.
+Introspection is a live call from a service to `Keycloak`'s introspection endpoint.
 
-Keycloak responds with whether the token is active or inactive, and it can also return token metadata.
+`Keycloak` responds with whether the token is `active` or not, and may also return token metadata.
 
 Why it matters:
 
@@ -54,13 +50,15 @@ Why it matters:
 - it catches revoked or otherwise inactive tokens
 - it gives a stronger trust check than decoding the JWT alone
 
-In this PoC, Kong introspects the token before it uses decoded claims to build policy input for OPA.
+In this PoC, `Kong` introspects the token before it uses decoded claims to build policy input for `OPA`.
+
+The full mechanics of why `Keycloak` can return `active: false` even for a structurally valid, unexpired JWT are covered in depth in the [introspection section](#what-introspection-actually-checks) below.
 
 ### 4. Claims
 
 Claims are the data inside the JWT payload.
 
-Examples in this PoC are:
+Examples in this PoC:
 
 - `iss`
 - `aud`
@@ -72,16 +70,18 @@ Examples in this PoC are:
 Decoding the token lets you read those claims.
 Validation or introspection tells you whether those claims are trustworthy.
 
+---
+
 ## How The Trust Chain Works
 
 ```mermaid
 flowchart LR
-    A[Keycloak issues JWT] --> B[Header + payload are signed]
+    A[Keycloak issues JWT] --> B[Header + payload signed]
     B --> C[Keycloak private key]
-    B --> D[JWT token returned to client]
+    B --> D[JWT returned to alice]
     D --> E[Service decodes payload to read claims]
-    E --> F[Service validates signature with Keycloak public key]
-    E --> G[Service introspects token with Keycloak]
+    E --> F[banking-api-service validates signature via JWKS]
+    E --> G[Kong introspects token with Keycloak]
     F --> H[Claims can be trusted]
     G --> H
 ```
@@ -89,8 +89,10 @@ flowchart LR
 The important idea is that decoding and trusting are not the same thing.
 
 - decoding answers: what does the token say?
-- validation answers: was it really issued by Keycloak, and is it acceptable now?
-- introspection answers: does Keycloak still consider this token active?
+- validation answers: was it really issued by `Keycloak`, and is it acceptable now?
+- introspection answers: does `Keycloak` still consider this token active?
+
+---
 
 ## How Signature Verification Works
 
@@ -100,74 +102,64 @@ JWTs have three parts:
 header.payload.signature
 ```
 
-Keycloak signs the `header.payload` part with its private key.
+`Keycloak` signs the `header.payload` part with its private key.
 The signature is attached as the third segment.
 
 When a service validates the token, it does the reverse:
 
 1. split the JWT into header, payload, and signature
-2. fetch or load Keycloak's public key or certificate
+2. fetch or load `Keycloak`'s public key (via JWKS — see [12 — JWKS Deep Dive](12-jwks.md))
 3. recompute the expected signature from the header and payload
 4. compare the computed signature with the one in the token
 
 If they match, the token was signed by the matching private key and the payload was not altered.
-
 If they do not match, the token is rejected.
 
 ### Private Key And Public Key
 
-Keycloak keeps the private key secret.
+`Keycloak` keeps the private key secret.
 
 Services never need the private key.
 They only need the public key, which is safe to share.
 
-That public key is what lets Spring Boot and other services verify that a token came from the expected Keycloak realm.
+That public key is what lets `banking-api-service` and other services verify that a token came from the expected `Keycloak` realm.
 
 ### Crypto Mechanism In This PoC
 
-The access token in this PoC uses `RS256`.
-
-That means:
+The access token in this PoC uses `RS256`:
 
 - `R` = RSA public-key cryptography
 - `S` = signature
 - `256` = SHA-256 hashing
 
-The process is:
+The signing process:
 
-1. Keycloak builds the JWT header and payload.
+1. `Keycloak` builds the JWT header and payload.
 2. It Base64URL-encodes each part.
 3. It concatenates them as `header.payload`.
 4. It hashes that string with SHA-256.
-5. It signs the hash with the Keycloak private RSA key.
+5. It signs the hash with the `Keycloak` private RSA key.
 6. It attaches the resulting signature as the third JWT segment.
 
-When a service validates the token, it repeats the verification side:
+When a service validates the token, it reverses:
 
 1. split the JWT into header, payload, and signature
 2. Base64URL-decode the header and payload
 3. rebuild the `header.payload` signing input
-4. use Keycloak's public RSA key to verify the signature
+4. use `Keycloak`'s public RSA key to verify the signature
 
 If the signature was created by the matching private key, verification succeeds.
 If the token was modified, verification fails because the hash no longer matches the signed content.
 
 In plain language:
 
-- Keycloak signs with its private key
-- services verify with Keycloak's public key
+- `Keycloak` signs with its private key
+- services verify with `Keycloak`'s public key
 - the SHA-256 hash makes the payload tamper-evident
 
-details could refer to https://medium.com/@bn121rajesh/rsa-sign-and-verify-using-openssl-behind-the-scene-bf3cac0aade2
+> How services discover and cache `Keycloak`'s public keys at the JWKS endpoint is covered in [12 — JWKS Deep Dive](12-jwks.md).
 
-### Public Certificate
-
-In many setups, the public key is exposed as a certificate or through a JWKS endpoint.
-
-The important part is the trust boundary:
-
-- private key signs tokens inside Keycloak
-- public key verifies tokens outside Keycloak
+---
 
 ## What Validation Usually Checks
 
@@ -183,145 +175,169 @@ A service usually checks:
 
 If any of these checks fail, the token should not be trusted for authorization decisions.
 
-In this PoC, Spring Boot performs JWT validation on incoming requests, so it can reject tokens that are expired, malformed, or issued for the wrong audience.
+In this PoC, `banking-api-service` performs JWT validation on incoming requests, so it can reject tokens that are expired, malformed, or issued for the wrong audience.
 
-## What Introspection Adds
+---
 
-Introspection is useful when a service wants a live answer from Keycloak.
+## What Introspection Actually Checks
 
-Typical flow:
+This section is the single full treatment of introspection mechanics in this documentation series.
 
-1. a request arrives with a bearer token
-2. Kong sends the token to Keycloak's introspection endpoint
-3. Keycloak returns `active: true` or `active: false`
-4. Kong only proceeds with policy evaluation if the token is active
+### What Keycloak Does During Introspection
 
-This adds an extra trust check beyond local JWT decoding.
+When `Kong` calls `Keycloak`'s introspection endpoint, `Keycloak` does more than decode the JWT.
 
-Why this is stronger than decoding alone:
+At a high level, `Keycloak` checks:
 
-- a decoded JWT can still be forged
-- a valid-looking JWT can still be inactive or revoked
-- Keycloak is the source of truth for whether the token should still be accepted
+1. can the token be parsed?
+2. is the token cryptographically acceptable?
+3. is the token expired?
+4. is the user session still active?
+5. is the client session still active?
+6. has logout, revocation, or invalidation made this token unusable?
 
-## Why `banking-api-service` Uses JWKS Instead Of Introspection For JWT Validation
+If those checks pass, `Keycloak` returns:
 
-This is an important design question.
+```json
+{
+  "active": true
+}
+```
 
-In this PoC:
+If they do not pass, `Keycloak` returns:
 
-- Kong uses Keycloak introspection to check whether the token is still active
-- `banking-api-service` uses JWKS to verify that the JWT is cryptographically valid and meant for this service
+```json
+{
+  "active": false
+}
+```
 
-These two mechanisms are related, but they do not solve exactly the same problem.
+So introspection is answering: does `Keycloak` still consider this token usable right now?
 
-### Why the Spring Service Prefers JWKS Validation
+### Why Keycloak Can Return `active: false` Even For A Structurally Valid, Unexpired JWT
 
-#### 1. It is local and fast
+This is one of the most important ideas in the whole stack.
 
-After Spring downloads Keycloak's public keys from the JWKS endpoint, it can validate JWTs locally.
+Because `Keycloak` keeps server-side session state, it can say a token is inactive even if:
 
-That means:
+- the token still looks like a valid JWT
+- the claims can still be decoded
+- the token has not yet reached its `exp` timestamp
 
-- no network round-trip is needed for every API request
-- validation is usually faster
+The reason is that `Keycloak` is not only the issuer of the JWT — it is also the owner of the live session state behind that JWT.
 
-If the service used introspection for every request, every API call would require a live call back to Keycloak.
+Examples of why `Keycloak` may return `active: false`:
 
-#### 2. JWTs are designed for this pattern
+- `alice` logged out
+- the user session expired
+- the client session expired
+- the `alice` account was disabled
+- the client (e.g. `mobile-banking-app`) was disabled
+- a realm or client invalidation event occurred
 
-This PoC uses self-contained JWT access tokens.
+So when `Keycloak` receives an introspection request, it is not only asking "does this JWT look well-formed?" — it is also asking "does this token still belong to a live, acceptable session according to `Keycloak` right now?"
 
-A self-contained JWT already carries:
+**The JWT carries token data. `Keycloak` keeps the session truth.**
 
-- claims
-- expiry
-- issuer
-- audience
-- signature
+That is the most important mental model for introspection.
 
-That makes it natural for a resource server to:
+### How Keycloak Keeps Session State
 
-- verify the JWT locally with JWKS
-- then trust the claims if validation succeeds
+Access tokens and sessions are related but not the same thing.
 
-This is the normal pattern for a Spring Security JWT resource server.
+- the JWT carries identity and claim data
+- `Keycloak` keeps live session information on the server side
 
-#### 3. Better resilience
+`Keycloak` typically maintains these session layers:
 
-If Keycloak is briefly slow or unavailable, local JWT validation can still work for already-issued tokens, as long as the service already has the needed public keys.
+| Layer | What It Represents |
+|---|---|
+| Authentication session | Temporary state during the login flow; removed after login completes or expires |
+| User session | The authenticated user session in a realm — tracks start time, idle/expiry, logout status |
+| Client session | Per-client participation in that user session (e.g. for `mobile-banking-app`) |
 
-If the service depended on introspection for every request, then every protected API call would depend on live Keycloak availability.
+At runtime, `Keycloak` stores online session state primarily in Infinispan caches. Offline sessions are persisted in the database. In clustered deployments, caches are replicated across nodes.
 
-So JWKS validation makes the service less tightly coupled to Keycloak at request time.
+The practical point: token claims are carried in the JWT, but live session activity is maintained server-side. That is why a token can decode correctly but introspection can still return `active: false` if the backing session state is gone.
 
-#### 4. Cleaner resource-server boundary
+### Introspection Flow In This PoC
 
-`banking-api-service` is acting as a resource server.
+```mermaid
+sequenceDiagram
+    participant alice as alice
+    participant Kong as Kong
+    participant Keycloak as Keycloak
+    participant OPA as OPA
+    participant banking as banking-api-service
 
-Spring Security resource-server support is built exactly for this pattern:
+    alice->>Kong: API request + bearer token
+    Kong->>Keycloak: POST /introspect (token)
+    Keycloak->>Keycloak: check cryptography + session state
+    Keycloak-->>Kong: active: true or active: false
+    Kong->>OPA: policy input (claims from token)
+    OPA-->>Kong: allow or deny
+    Kong->>banking: forward allowed request
+    banking->>banking: validate JWT signature + issuer + audience
+    banking-->>alice: API response
+```
 
-- bearer JWT
-- public key discovery through JWKS
-- issuer validation
-- audience validation
+### Session And Token Relationship
 
-So using JWKS is not a workaround. It is the standard and efficient model for this kind of service.
+```mermaid
+flowchart LR
+    alice[alice login] --> Keycloak[Keycloak]
+    Keycloak --> Session[Server-side session state]
+    Keycloak --> Token[Access token and refresh token]
+    Token --> Kong[Kong introspection]
+    Session --> Kong
+    Token --> banking[banking-api-service JWT validation]
+```
 
-## What Introspection Gives That JWKS Validation Does Not
+---
 
-JWKS validation answers:
+## JWKS vs Introspection — Which To Use
 
-- was this token signed by the trusted issuer?
-- does it have the right issuer, audience, and expiry?
+This PoC uses both mechanisms, but in different places.
 
-Introspection adds something different:
+### Why `banking-api-service` Uses JWKS Rather Than Introspection
 
-- a live answer from Keycloak about whether the token is still active right now
+`banking-api-service` acts as a resource server. It uses JWKS for JWT validation for these reasons:
 
-That is useful for cases such as:
+**1. Local and fast.** After `banking-api-service` downloads `Keycloak`'s public keys from the JWKS endpoint, it can validate JWTs locally with no network round-trip per request.
 
-- logout
-- revocation
-- session expiry
-- admin-side invalidation
-- other server-side state changes in Keycloak
+**2. JWTs are designed for this pattern.** A self-contained JWT already carries claims, expiry, issuer, audience, and signature. That makes local JWKS validation the natural and standard pattern for a Spring Security JWT resource server.
 
-So introspection is stronger as a live status check.
+**3. Better resilience.** If `Keycloak` is briefly slow or unavailable, local JWT validation can still work for already-issued tokens as long as the service already has the needed public keys. Introspection on every request creates a hard dependency on live `Keycloak` availability.
 
-## Why This Architecture Uses Both
+**4. Cleaner resource-server boundary.** Spring Security resource-server support is built exactly for bearer JWT + public key discovery through JWKS + issuer and audience validation. Using JWKS is the standard, efficient model — not a workaround.
 
-This PoC deliberately uses both mechanisms, but in different places.
+> Key rotation mechanics and JWKS caching are covered in [12 — JWKS Deep Dive](12-jwks.md).
 
-### Kong introspection
+### What Each Mechanism Answers
 
-Purpose:
+| Mechanism | Question answered |
+|---|---|
+| JWKS validation | Was this token signed by the trusted issuer? Does it have the right `iss`, `aud`, and `exp`? |
+| Introspection | Does `Keycloak` still consider this token active right now? |
 
-- live token activity check at the edge
+JWKS validation answers whether the token is cryptographically trustworthy.
+Introspection adds a live answer about whether the session behind the token is still alive.
 
-Meaning:
+### Why This PoC Uses Both
 
-- Kong asks Keycloak whether the token is active before it trusts the token enough to build OPA input
+| Component | Mechanism | Purpose |
+|---|---|---|
+| `Kong` | Introspection | Live token activity check at the edge — asks `Keycloak` whether the token is active before building `OPA` policy input |
+| `banking-api-service` | JWKS validation | Local cryptographic verification — the service does not blindly trust that the gateway already checked everything |
 
-### Spring JWT validation with JWKS
+Defense in depth: `banking-api-service` still validates the JWT as its own trust boundary, even after `Kong` has already introspected it.
 
-Purpose:
+**Short version:**
 
-- local cryptographic verification inside the service
-- issuer and audience enforcement
-- defense in depth
-
-Meaning:
-
-- the service does not blindly trust that the gateway already checked everything
-- the service still validates the JWT as its own trust boundary
-
-## Short Version
-
-- introspection = live status check
+- introspection = live session status check
 - JWKS validation = local cryptographic trust check
 
-And `banking-api-service` uses JWKS because that is the normal, efficient pattern for a JWT-based Spring resource server.
+---
 
 ## What Claims Are Used For
 
@@ -331,35 +347,45 @@ Examples:
 
 - `iss` tells services who issued the token
 - `aud` tells services which client or API the token is meant for
-- `preferred_username` gives a readable username
+- `preferred_username` gives a readable username (`alice`, `ops-admin`)
 - `realm_access.roles` gives role information
 - `customer_id` and `account_ids` carry business context
 
-Claims are easy to read once decoded, but they are only safe to use after validation or introspection.
+Claims are easy to read once decoded, but they are only safe to act on after validation or introspection.
 
-## End-To-End Example
+---
 
-For the `alice` token in this PoC:
+## End-To-End Example (alice)
 
-1. Keycloak issues an access token for `alice`
-2. Keycloak signs the header and payload with its private key
-3. the JWT payload contains claims like `iss`, `aud`, `preferred_username`, `customer_id`, and `account_ids`
-4. Kong or Spring decodes the payload to read those claims
-5. Spring validates the token signature with Keycloak's public key
-6. Kong may also introspect the token before it sends policy input to OPA
+1. `alice` authenticates with `Keycloak`.
+2. `Keycloak` creates a user session and a client session server-side.
+3. `Keycloak` issues a signed JWT access token containing `iss`, `aud`, `preferred_username`, `customer_id`, and `account_ids`.
+4. `alice` sends the bearer token to `Kong`.
+5. `Kong` calls `Keycloak`'s introspection endpoint — `Keycloak` checks the JWT and the live session state, returns `active: true`.
+6. `Kong` sends policy input (decoded claims) to `OPA`; `OPA` returns allow.
+7. `Kong` forwards the request to `banking-api-service`.
+8. `banking-api-service` validates the JWT signature using `Keycloak`'s public key (fetched via JWKS), checks `iss`, `aud`, and `exp`.
+9. `banking-api-service` returns the API response to `alice`.
 
-That gives two layers of trust:
+Two layers of trust:
 
-- local cryptographic verification
-- live Keycloak status verification
+- live `Keycloak` session verification (via `Kong` introspection)
+- local cryptographic verification (via `banking-api-service` JWKS validation)
 
-## Short Version
+> For how access tokens are renewed via refresh tokens, see [13 — Token Lifecycle](13-token-lifecycle.md).
 
-- decode = read what the token says
-- validate = prove the token is genuine and acceptable
-- introspect = ask Keycloak whether the token is still active
+---
 
-The signature is what makes the token tamper-evident.
-Validation is what makes it acceptable.
-Introspection is what makes it a live answer from Keycloak.
+## Summary
 
+- **decode** = read what the token says
+- **validate** = prove the token is genuine, meant for this service, and not expired
+- **introspect** = ask `Keycloak` whether the token's session is still alive
+
+The signature makes the token tamper-evident.
+Validation makes it locally acceptable.
+Introspection gives the live answer from `Keycloak` — and `Keycloak` can return `active: false` even for a structurally valid, unexpired JWT because it owns the session truth, not just the token string.
+
+---
+
+← Prev: [10 — identity-bootstrap-service](10-identity-bootstrap-service.md) · Next: [12 — JWKS Deep Dive](12-jwks.md) →
