@@ -12,3 +12,5 @@ target/
 Thumbs.db
 
 *.log
+# CSDN publishing tooling (contains login cookies)
+.csdn-tools/
