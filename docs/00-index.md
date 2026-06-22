@@ -1,6 +1,6 @@
 # Docs Index
 
-Explanation and walkthrough for the mobile-banking authn/authz PoC.
+Explanation and walkthrough authn/authz for microservice system with a sample mobile-banking PoC.
 
 ## The story in one paragraph
 
